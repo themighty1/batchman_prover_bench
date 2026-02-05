@@ -8,7 +8,7 @@
 #define HIGH64(x) _mm_extract_epi64((block)x, 1)
 
 
-template<typename IO>
+template<typename IO, typename VoleType = VoleTriple<IO>>
 class FpOSTriple {
 public:
 	int party;
@@ -24,7 +24,7 @@ public:
 	IO *io;
 	IO **ios;
 	PRG prg;
-	VoleTriple<IO> *vole = nullptr;
+	VoleType *vole = nullptr;
 	FpAuthHelper<IO> *auth_helper = nullptr;
 	ThreadPool *pool = nullptr;
 
@@ -39,7 +39,7 @@ public:
 		io = ios[0];
 		this->ios = ios;
 		pool = new ThreadPool(threads);
-		vole = new VoleTriple<IO>(3-party, threads, ios);
+		vole = new VoleType(3-party, threads, ios);
 		MEM_SZ = vole->param.n;
 		BUFFER_SZ = vole->param.buf_sz()/CHECK_DIV_SZ*CHECK_DIV_SZ;
 		auth_buffer_andgate = new __uint128_t[MEM_SZ];
@@ -86,7 +86,7 @@ public:
 		io->send_data(&lam, sizeof(uint64_t));
 		return (__uint128_t)makeBlock(w, LOW64(mac));
 	}
-	
+
 	void authenticated_val_input(__uint128_t *label, const uint64_t *w, int len) {
 		uint64_t *lam = new uint64_t[len];
 		vole->extend(label, len);

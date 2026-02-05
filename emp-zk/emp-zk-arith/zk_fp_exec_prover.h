@@ -2,10 +2,10 @@
 #define ZK_FP_EXECUTIION_PROVER_H__
 #include "emp-zk/emp-zk-arith/zk_fp_exec.h"
 
-template<typename IO>
+template<typename IO, typename VoleType = VoleTriple<IO>>
 class ZKFpExecPrv : public ZKFpExec {
 public:
-	FpOSTriple<IO> *ostriple;
+	FpOSTriple<IO, VoleType> *ostriple;
 	IO* io = nullptr;
 
 	__uint128_t get_delta() {
@@ -37,7 +37,7 @@ public:
 		prg.random_block((block*)&this->pub_mac, 1);
 		this->pub_mac = mod(this->pub_mac & (__uint128_t)0xFFFFFFFFFFFFFFFFULL, pr);
 		this->io = ios[0];
-		this->ostriple = new FpOSTriple<IO>(ALICE, threads, ios);
+		this->ostriple = new FpOSTriple<IO, VoleType>(ALICE, threads, ios);
 	}
 
 	~ZKFpExecPrv() {

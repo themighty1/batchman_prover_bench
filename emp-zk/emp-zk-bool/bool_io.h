@@ -12,6 +12,7 @@ class BoolIO: public IOChannel<BoolIO<IO>> { public:
 	bool sender;
 	vector<unsigned char> tmp_arr;
 	using IOChannel<BoolIO<IO>>::counter;
+	uint64_t recv_counter = 0;
 	BoolIO(IO * io, int sender) : io(io), sender(sender) {
 		buf = new bool[NETWORK_BUFFER_SIZE2];
 		if(sender)
@@ -63,11 +64,13 @@ class BoolIO: public IOChannel<BoolIO<IO>> { public:
 	void send_data_internal(const void * data, int len) {
 		if(ptr != 0) flush();
 		io->send_data(data, len);
+		// Note: counter already incremented by IOChannel::send_data
 	}
 
 	void recv_data_internal(void * data, int len) {
 		if(ptr != NETWORK_BUFFER_SIZE2) flush();
 		io->recv_data(data, len);
+		recv_counter += len;
 	}
 
 	void send_bool_raw(const bool * data, int length) {
@@ -108,6 +111,7 @@ class BoolIO: public IOChannel<BoolIO<IO>> { public:
 
 		int cnt = 0;
 		io->recv_data(tmp_arr.data(), length/8);
+		recv_counter += length/8;
 		hash.put(tmp_arr.data(), length/8);
 
 		unsigned long long * data64 = (unsigned long long *) data;
@@ -128,6 +132,7 @@ class BoolIO: public IOChannel<BoolIO<IO>> { public:
 		}
 		if (8*i != length) {
 			io->recv_data(data + 8*i, length - 8*i);
+			recv_counter += (length - 8*i);
 			hash.put(data + 8*i, length - 8*i);
 		}
 	}

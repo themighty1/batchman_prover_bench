@@ -1,3 +1,4 @@
+// MESSY: Protocol logic is inlined in this test. See stack_batched_matmul_v2.cpp for encapsulated version.
 #include "emp-zk/emp-zk.h"
 #include <iostream>
 #include "emp-tool/emp-tool.h"

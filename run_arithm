@@ -1,0 +1,86 @@
+#!/bin/bash
+#
+# Batchman Arithmetic Circuit Benchmark
+# Runs prover and verifier locally, reports prover stats:
+#   - Total runtime
+#   - VOLEs consumed
+#   - Bytes sent/received
+#
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PROVER="$DIR/build/bin/test_bench_batchman_prover"
+VERIFIER="$DIR/build/bin/test_bench_batchman_verifier"
+
+# Show help if no arguments
+if [ $# -eq 0 ]; then
+    echo "Batchman Arithmetic Circuit Benchmark"
+    echo ""
+    echo "Usage: ./run_arithm <INPUT> <MUL> <BRANCHES> <BATCHES>"
+    echo "       ./run_arithm build"
+    echo ""
+    echo "Commands:"
+    echo "  build      Build/rebuild the benchmark binaries"
+    echo ""
+    echo "Arguments:"
+    echo "  INPUT      Number of input wires per circuit"
+    echo "  MUL        Number of multiplication gates per circuit"
+    echo "  BRANCHES   Number of branches in disjunction (B)"
+    echo "  BATCHES    Number of batch instances to prove (R)"
+    echo ""
+    echo "Examples:"
+    echo "  ./run_arithm build              # build first"
+    echo "  ./run_arithm 10 100 20 1000     # 10 inputs, 100 muls, 20 branches, 1000 batches"
+    echo "  ./run_arithm 100 1000 20 500    # 100 inputs, 1000 muls"
+    echo ""
+    echo "Note: Connected repetitions are enabled (output of batch i = input of batch i+1)"
+    echo "      Requires MUL >= INPUT"
+    exit 0
+fi
+
+# Build command
+if [ "$1" == "build" ]; then
+    echo "Building batchman benchmark..."
+    cd "$DIR/build" && cmake .. && make -j4 test_bench_batchman_prover test_bench_batchman_verifier
+    exit $?
+fi
+
+# Check binaries exist
+if [ ! -f "$PROVER" ] || [ ! -f "$VERIFIER" ]; then
+    echo "Error: Binaries not found. Run './run_arithm build' first."
+    exit 1
+fi
+
+# Check correct number of arguments
+if [ $# -ne 4 ]; then
+    echo "Error: Wrong number of arguments."
+    echo ""
+    echo "Usage: ./run_arithm <INPUT> <MUL> <BRANCHES> <BATCHES>"
+    echo ""
+    echo "Run './run_arithm' for help."
+    exit 1
+fi
+
+PORT=12345
+INPUT=$1
+MUL=$2
+BRANCHES=$3
+BATCHES=$4
+
+# Run verifier in background, then prover in foreground
+($VERIFIER $PORT $INPUT $MUL $BRANCHES $BATCHES > /tmp/batchman_verifier.log 2>&1) &
+VERIFIER_PID=$!
+sleep 0.5
+$PROVER $PORT $INPUT $MUL $BRANCHES $BATCHES
+
+# Wait for verifier and check result
+wait $VERIFIER_PID
+VERIFIER_EXIT=$?
+
+echo ""
+if [ $VERIFIER_EXIT -eq 0 ]; then
+    echo "Verifier: PASSED"
+else
+    echo "Verifier: FAILED (exit code $VERIFIER_EXIT)"
+    echo "Verifier log:"
+    cat /tmp/batchman_verifier.log
+fi

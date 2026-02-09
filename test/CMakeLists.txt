@@ -39,7 +39,7 @@ add_test_case_with_run(arith stack_multi_single_disj_matmul)
 add_test_case_with_run(arith stack_batched_matmul_v1)
 add_test_case_with_run(arith stack_batched_matmul_v2)
 
-# Batchman benchmarks (mock VOLE, no setup overhead)
-add_test_case_with_run(bench batchman)
+# Batchman benchmarks
 add_test_executable_with_lib(bench batchman_prover)
 add_test_executable_with_lib(bench batchman_verifier)
+add_test_executable_with_lib(bench batchman_bool)

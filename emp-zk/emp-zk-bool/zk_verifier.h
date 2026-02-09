@@ -6,10 +6,10 @@
 #include "emp-zk/emp-zk-bool/zk_bool_circuit_exec.h"
 #include "emp-zk/emp-zk-bool/polynomial.h"
 
-template<typename IO>
-class ZKBoolCircExecVer:public ZKBoolCircExec<IO> { public:
+template<typename IO, typename COTType = FerretCOT<IO>>
+class ZKBoolCircExecVer:public ZKBoolCircExec<IO, COTType> { public:
 	block delta, zdelta;
-	using ZKBoolCircExec<IO>::pub_label;
+	using ZKBoolCircExec<IO, COTType>::pub_label;
 	ZKBoolCircExecVer() {
 		PRG tmp;
 		block a;
@@ -26,8 +26,8 @@ class ZKBoolCircExecVer:public ZKBoolCircExec<IO> { public:
 		this->delta = set_bit(_delta, 0);
 		this->zdelta = (this->delta) ^ makeBlock(0x0LL, 0x1LL);
 	}
-	template<typename T>
-	void set_ostriple(OSTriple<T> *ostriple) {
+	template<typename T, typename C>
+	void set_ostriple(OSTriple<T, C> *ostriple) {
 		this->ostriple = ostriple;
 		this->delta = ostriple->delta;
 		this->zdelta = (this->delta) ^ makeBlock(0x0LL, 0x1LL);
@@ -39,19 +39,19 @@ class ZKBoolCircExecVer:public ZKBoolCircExec<IO> { public:
 };
 
 
-template<typename IO>
+template<typename IO, typename COTType = FerretCOT<IO>>
 class ZKVerifier: public ProtocolExecution {
 public:
 	IO* io = nullptr;
-	OSTriple<IO>* ostriple = nullptr;
-	PolyProof<IO> *polyproof = nullptr;
-	ZKBoolCircExecVer<IO> *eva = nullptr;
-	ZKVerifier(IO **ios, int threads, ZKBoolCircExecVer<IO> *t, void * state): ProtocolExecution(BOB) {
+	OSTriple<IO, COTType>* ostriple = nullptr;
+	PolyProof<IO, COTType> *polyproof = nullptr;
+	ZKBoolCircExecVer<IO, COTType> *eva = nullptr;
+	ZKVerifier(IO **ios, int threads, ZKBoolCircExecVer<IO, COTType> *t, void * state): ProtocolExecution(BOB) {
 		this->io = ios[0];
-		ostriple = new OSTriple<IO>(BOB, threads, ios, state);
-		polyproof = new PolyProof<IO>(BOB, ios[0], ostriple->ferret);
+		ostriple = new OSTriple<IO, COTType>(BOB, threads, ios, state);
+		polyproof = new PolyProof<IO, COTType>(BOB, ios[0], ostriple->ferret);
 		polyproof->delta = ostriple->delta;
-		t->template set_ostriple<IO>(ostriple);
+		t->template set_ostriple<IO, COTType>(ostriple);
 		t->polyproof = this->polyproof;
 		this->eva = t;
 	}

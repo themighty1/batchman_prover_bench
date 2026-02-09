@@ -4,7 +4,7 @@
 #include "emp-tool/emp-tool.h"
 #include "emp-ot/emp-ot.h"
 
-template<typename IO>
+template<typename IO, typename COTType = FerretCOT<IO>>
 class PolyProof {
 public:
 	int party;
@@ -16,9 +16,9 @@ public:
 	block *buffer1 = nullptr;
 	int num;
 	GaloisFieldPacking pack;
-	FerretCOT<IO> *ferret = nullptr;
+	COTType *ferret = nullptr;
 
-	PolyProof(int party, IO *io, FerretCOT<IO> *ferret) {
+	PolyProof(int party, IO *io, COTType *ferret) {
 		this->party = party;
 		this->io = io;
 		this->ferret = ferret;

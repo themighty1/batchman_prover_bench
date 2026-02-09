@@ -7,7 +7,7 @@
 #include "emp-zk/emp-zk-bool/cheat_record.h"
 
 
-template<typename IO>
+template<typename IO, typename COTType = FerretCOT<IO>>
 class OSTriple {
 public:
 	int party, threads;
@@ -29,7 +29,7 @@ public:
 	IO *io;
 	IO **ios;
 	PRG prg;
-	FerretCOT<IO> *ferret = nullptr;
+	COTType *ferret = nullptr;
 	TripleAuth<IO> *auth_helper;
 	ThreadPool *pool = nullptr;
 	void * ferret_state = nullptr;
@@ -40,9 +40,9 @@ public:
 		this->ferret_state = state;
 		// initiate Iterative COT with regular noise and security against malicious adv
 		if(ferret_state == nullptr)
-			ferret = new FerretCOT<IO>(3-party, threads, ios, true);
+			ferret = new COTType(3-party, threads, ios, true);
 		else {
-			ferret = new FerretCOT<IO>(3-party, threads, ios, true, false);
+			ferret = new COTType(3-party, threads, ios, true, false);
 			ferret->disassemble_state(ferret_state, 10400000);
 		}
 		BUFFER_MEM_SZ = ferret->param.n;

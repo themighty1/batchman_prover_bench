@@ -7,9 +7,9 @@
 #include "emp-zk/emp-zk-bool/zk_bool_circuit_exec.h"
 #include "emp-zk/emp-zk-bool/polynomial.h"
 
-template<typename IO>
-class ZKBoolCircExecPrv:public ZKBoolCircExec<IO> { public:
-	using ZKBoolCircExec<IO>::pub_label;
+template<typename IO, typename COTType = FerretCOT<IO>>
+class ZKBoolCircExecPrv:public ZKBoolCircExec<IO, COTType> { public:
+	using ZKBoolCircExec<IO, COTType>::pub_label;
 	ZKBoolCircExecPrv() {
 		PRG prg(fix_key);
 		prg.random_block(pub_label, 2);
@@ -20,27 +20,27 @@ class ZKBoolCircExecPrv:public ZKBoolCircExec<IO> { public:
 	block not_gate(const block&a) override {
 		return a ^ makeBlock(0, 1);
 	}
-	template<typename T>
-	void set_ostriple(OSTriple<T> *ostriple) {
+	template<typename T, typename C>
+	void set_ostriple(OSTriple<T, C> *ostriple) {
 		this->ostriple = ostriple;
 	}
 };
 
 
 
-template<typename IO>
+template<typename IO, typename COTType = FerretCOT<IO>>
 class ZKProver: public ProtocolExecution {
 public:
 	IO* io = nullptr;
-	OSTriple<IO> *ostriple = nullptr;
-	PolyProof<IO> *polyproof = nullptr;
-	ZKBoolCircExecPrv<IO> *gen = nullptr;
-	ZKProver(IO** ios, int threads, ZKBoolCircExecPrv<IO> *t, void * state): ProtocolExecution(ALICE) {
+	OSTriple<IO, COTType> *ostriple = nullptr;
+	PolyProof<IO, COTType> *polyproof = nullptr;
+	ZKBoolCircExecPrv<IO, COTType> *gen = nullptr;
+	ZKProver(IO** ios, int threads, ZKBoolCircExecPrv<IO, COTType> *t, void * state): ProtocolExecution(ALICE) {
 		this->io = ios[0];
 		this->gen = t;
-		ostriple = new OSTriple<IO>(ALICE, threads, ios, state);
-		polyproof = new PolyProof<IO>(ALICE, ios[0], ostriple->ferret);
-		t->template set_ostriple<IO>(ostriple);
+		ostriple = new OSTriple<IO, COTType>(ALICE, threads, ios, state);
+		polyproof = new PolyProof<IO, COTType>(ALICE, ios[0], ostriple->ferret);
+		t->template set_ostriple<IO, COTType>(ostriple);
 		t->polyproof = this->polyproof;
 	}
 	~ZKProver() {

@@ -1,5 +1,15 @@
-// Batchman PROVER benchmark
-// Uses encapsulated BatchedDisjunction class with MockVole
+// Arithmetic circuit PROVER benchmark
+//
+// zkVM Emulation:
+//   This benchmark emulates zkVM execution where each step has:
+//   - 3 computed outputs from mul gates:
+//     * instruction  (what operation was executed)
+//     * PC           (program counter - next instruction address)
+//     * register     (the modified register value)
+//   - Remaining outputs are pass-through (unchanged VM state/registers)
+//
+//   Connected repetitions prove: output[step] == input[step+1]
+//   This chains VM steps together, proving execution trace validity.
 #include "emp-zk/emp-zk.h"
 #include "emp-zk/emp-vole/mock_vole.h"
 #include "emp-zk/emp-zk-arith/batched_disjunction.h"
@@ -11,7 +21,7 @@ using namespace std;
 int port;
 const int threads = 1;
 
-void run_prover(BoolIO<NetIO> *ios[threads], int matrix_sz, int branch_sz, int batch_sz) {
+void run_prover(BoolIO<NetIO> *ios[threads], int input_count, int mul_count, int branch_sz, int batch_sz) {
     uint64_t *res = new uint64_t[batch_sz];
     for (int i = 0; i < batch_sz; i++) res[i] = 0;
 
@@ -28,10 +38,15 @@ void run_prover(BoolIO<NetIO> *ios[threads], int matrix_sz, int branch_sz, int b
     ostriple->vole->reset_counter();
 
     // Create protocol instance
-    BatchedDisjunction<BoolIO<NetIO>, MockVoleType> protocol(ALICE, matrix_sz, branch_sz, batch_sz);
+    BatchedDisjunction<BoolIO<NetIO>, MockVoleType> protocol(
+        ALICE, input_count, mul_count, branch_sz, batch_sz);
 
     // Run protocol
     protocol.authenticate_and_multiply();
+
+    // Connection proofs are now handled inside prove_mac_in_branches()
+    // with per-branch output_source mapping (default: all pass-through)
+
     protocol.generate_left_challenge();
     protocol.compute_left_vectors();
     protocol.commit_left_vectors();
@@ -39,6 +54,10 @@ void run_prover(BoolIO<NetIO> *ios[threads], int matrix_sz, int branch_sz, int b
         error("Inner product check fails!");
     protocol.generate_mac_challenge();
     protocol.generate_macs();
+
+    // Enable external PCS mode: skip product-of-branches check
+    // External PCS will prove: ∃ br: MAC[b] - mac[br] + conn_proofs[br] == 0
+    protocol.set_external_pcs_mode(true);
     protocol.prove_mac_in_branches(res);
 
     auto total_us = time_from(start);
@@ -59,25 +78,32 @@ void run_prover(BoolIO<NetIO> *ios[threads], int matrix_sz, int branch_sz, int b
 }
 
 int main(int argc, char** argv) {
-    if (argc < 5) {
-        cout << "usage: " << argv[0] << " PORT DIMENSION BRANCHES BATCHES" << endl;
+    if (argc < 6) {
+        cout << "usage: " << argv[0] << " PORT INPUT MUL BRANCHES BATCHES" << endl;
+        cout << endl;
+        cout << "Parameters:" << endl;
+        cout << "  INPUT    Number of input wires" << endl;
+        cout << "  MUL      Number of multiplication gates" << endl;
+        cout << "  BRANCHES Number of branches in disjunction" << endl;
+        cout << "  BATCHES  Number of batch instances" << endl;
         return -1;
     }
 
     port = atoi(argv[1]);
-    int dim = atoi(argv[2]);
-    int branches = atoi(argv[3]);
-    int batches = atoi(argv[4]);
+    int input_count = atoi(argv[2]);
+    int mul_count = atoi(argv[3]);
+    int branches = atoi(argv[4]);
+    int batches = atoi(argv[5]);
 
     cout << "=== Batchman Prover ===" << endl;
-    cout << "Dim: " << dim << " (" << dim*dim*dim << " muls/branch)" << endl;
+    cout << "Inputs: " << input_count << ", Muls: " << mul_count << endl;
     cout << "Branches: " << branches << ", Batches: " << batches << endl;
 
     BoolIO<NetIO>* ios[threads];
     for (int i = 0; i < threads; ++i)
         ios[i] = new BoolIO<NetIO>(new NetIO(nullptr, port+i, true), true);
 
-    run_prover(ios, dim, branches, batches);
+    run_prover(ios, input_count, mul_count, branches, batches);
 
     for (int i = 0; i < threads; ++i) {
         delete ios[i]->io;

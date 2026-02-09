@@ -4,11 +4,11 @@
 #include "emp-zk/emp-zk-bool/polynomial.h"
 #include <iostream>
 
-template<typename IO>
+template<typename IO, typename COTType = FerretCOT<IO>>
 class ZKBoolCircExec:public CircuitExecution { public:
 	int64_t gid = 0;
-	OSTriple<IO> *ostriple;
-	PolyProof<IO> *polyproof;
+	OSTriple<IO, COTType> *ostriple;
+	PolyProof<IO, COTType> *polyproof;
 	block pub_label[2];
 	uint64_t communication() {
 		return ostriple->communication();

@@ -1,0 +1,82 @@
+#!/bin/bash
+#
+# Batchman Boolean Circuit Benchmark
+# Runs prover and verifier locally, reports stats
+#
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+BINARY="$DIR/build/bin/test_bench_batchman_bool"
+
+# Show help if no arguments
+if [ $# -eq 0 ]; then
+    echo "Batchman Boolean Circuit Benchmark"
+    echo ""
+    echo "Usage: ./run_bool <INPUT> <MUL> <BRANCHES> <BATCHES>"
+    echo "       ./run_bool build"
+    echo ""
+    echo "Commands:"
+    echo "  build      Build/rebuild the benchmark binary"
+    echo ""
+    echo "Arguments:"
+    echo "  INPUT      Number of input wires per circuit"
+    echo "  MUL        Number of AND gates per circuit"
+    echo "  BRANCHES   Number of branches in disjunction (B)"
+    echo "  BATCHES    Number of batch instances to prove (R)"
+    echo ""
+    echo "Examples:"
+    echo "  ./run_bool build              # build first"
+    echo "  ./run_bool 10 100 20 1000     # 10 inputs, 100 ANDs, 20 branches, 1000 batches"
+    echo "  ./run_bool 100 1000 20 500    # 100 inputs, 1000 ANDs"
+    echo ""
+    echo "Note: Connected repetitions are enabled (output of batch i = input of batch i+1)"
+    echo "      Requires MUL >= INPUT"
+    exit 0
+fi
+
+# Build command
+if [ "$1" == "build" ]; then
+    echo "Building bool benchmark..."
+    cd "$DIR/build" && cmake .. && make -j4 test_bench_batchman_bool
+    exit $?
+fi
+
+# Check correct number of arguments
+if [ $# -ne 4 ]; then
+    echo "Error: Wrong number of arguments."
+    echo ""
+    echo "Usage: ./run_bool <INPUT> <MUL> <BRANCHES> <BATCHES>"
+    echo ""
+    echo "Run './run_bool' for help."
+    exit 1
+fi
+
+# Check binary exists
+if [ ! -f "$BINARY" ]; then
+    echo "Error: Binary not found. Run './run_bool build' first."
+    exit 1
+fi
+
+PORT=12348
+INPUT=$1
+MUL=$2
+BRANCHES=$3
+BATCHES=$4
+
+# Run verifier in background, then prover in foreground
+($BINARY 2 $PORT 127.0.0.1 $INPUT $MUL $BRANCHES $BATCHES > /tmp/bool_verifier.log 2>&1) &
+VERIFIER_PID=$!
+sleep 0.5
+$BINARY 1 $PORT 127.0.0.1 $INPUT $MUL $BRANCHES $BATCHES
+
+# Wait for verifier and check result
+wait $VERIFIER_PID
+VERIFIER_EXIT=$?
+
+echo ""
+if [ $VERIFIER_EXIT -eq 0 ]; then
+    echo "Verifier: PASSED"
+else
+    echo "Verifier: FAILED (exit code $VERIFIER_EXIT)"
+    echo "Verifier log:"
+    cat /tmp/bool_verifier.log
+fi

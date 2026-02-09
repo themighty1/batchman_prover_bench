@@ -41,4 +41,8 @@ inline void finalize_zk_arith() {
 	delete FpPolyProof<IO>::fppolyproof;
 	delete ZKFpExec::zk_exec;
 }
+
+// Include after setup/finalize are defined (they're used by these headers)
+#include "emp-zk/emp-zk-arith/batched_disjunction.h"
+
 #endif

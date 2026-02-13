@@ -100,11 +100,11 @@ fn setup_pcs() -> (MyPcs, Challenger) {
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     // Conjectured soundness = log_blowup * num_queries + query_pow_bits
-    //                       = 1 * 112 + 16 = 128 bits
+    //                       = 4 * 28 + 16 = 128 bits
     let fri_params = FriParameters {
-        log_blowup: 1,
+        log_blowup: 4,
         log_final_poly_len: 0,
-        num_queries: 112,
+        num_queries: 28,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
@@ -606,14 +606,10 @@ fn main() {
     let target_z: usize = 16000;
     let branch_count: usize = 132;
     // K: number of committed Q polynomials (split-commit).
-    // Sweet K = lowest proof size without a large runtime penalty.
-    // At 100 KHz proving rate with branch_count=132:
-    //   1K roots (100 sets): K=2  -> 895 KB, 21s
-    //   2K roots  (50 sets): K=2  -> 830 KB, 20s
-    //   4K roots  (25 sets): K=4  -> 811 KB, 20s
-    //   8K roots  (13 sets): K=8  -> 808 KB, 21s
-    //  16K roots   (7 sets): K=16 -> 813 KB, 23s
-    let num_splits: usize = 32;
+    // At 100 KHz proving rate with branch_count=132, K=32 with 8K roots (13 sets)
+    // gives the best KHz/proof-bytes ratio: 370 KB, 20s (log_blowup=3).
+    // Further gains may be possible with more fine-tuning of K, log_blowup, pow_bits.
+    let num_splits: usize = 256;
 
     // Find optimal Z root count (sweet spot) for this branch count and split count
     let (num_roots, j, deg_qi, dummy_count) = find_sweet_spot(target_z, branch_count, num_splits);

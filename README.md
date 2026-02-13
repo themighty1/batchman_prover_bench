@@ -138,3 +138,50 @@ instead of VOLE, with GF(2^128) operations for proof compression.
 
 These mock implementations pre-generate correlations to benchmark the protocol
 logic separately from the OT extension / LPN overhead.
+
+### 5. Binius FRI PCS Mode
+
+**Directory:** `pcs-mode/`
+
+This fork adds a Binius-based FRI polynomial commitment scheme implementation as an
+alternative to the Plonky3-based approach. Uses Binius FRI over GF(2^128) with manual
+parameter control to bypass auto-chooser limitations.
+
+**Key Features:**
+- **Manual FRI parameters** for optimal performance (auto-chooser is legacy)
+- **Blake3 hashing** for better performance than Groestl256
+- **Grinding support** for computational security boost (proof-of-work)
+- **Flat scaling** - nearly constant proof size and time across workload sizes
+
+**Build and Run:**
+```bash
+cd pcs-mode
+cargo build --release --bin bench_binius
+./target/release/bench_binius
+```
+
+**Benchmark Results (256K roots, K=16, 256× ratio):**
+
+| Metric | Value |
+|--------|-------|
+| Workload | 256K roots, 16 splits, 67M Q roots |
+| Polynomial degrees | deg(Qi)=2^22-1, deg(Z)=263K, deg(P)=67M |
+| **Prover time** | **3.43s** (1.56s commit + 1.60s FRI + 0.27s grinding) |
+| **Proof size** | **407 KB** (213 KB Z + 195 KB Q) |
+| **Verifier time** | **8.85 ms** |
+| **Security** | **124-bit total** (100-bit FRI + 24-bit grinding) |
+
+**Parameters:**
+- Manual FRI: log_dim=14, log_batch=4, log_inv_rate=2, arity=4
+- 16 columns batched (2^14 = 16,384 elements per column)
+- 148 test queries, 18-19 fold rounds
+- Grinding: 24-bit (2.7M hash attempts, ~10M hashes/sec)
+
+**Scaling (K=16, 100-bit + 20-bit grinding):**
+- 16K roots: 1.95s, 307 KB
+- 32K roots: 2.10s, 320 KB
+- 64K roots: 1.98s, 338 KB
+- 128K roots: 2.10s, 363 KB
+- 256K roots: 2.52s, 389 KB
+
+Performance remains nearly flat across workload sizes due to fixed manual FRI parameters.

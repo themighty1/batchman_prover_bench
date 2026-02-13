@@ -28,6 +28,20 @@ itertools = "0.14"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 
+# Binius dependencies (from GitHub main branch)
+binius_core = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_field = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_ntt = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_hash = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_hal = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_math = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_compute = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_utils = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+binius_maybe_rayon = { git = "https://github.com/IrreducibleOSS/binius", default-features = false }
+bytemuck = "1"
+blake3 = "1"
+digest = "0.10"
+
 [[bin]]
 name = "bench"
 path = "src/main.rs"
@@ -35,3 +49,7 @@ path = "src/main.rs"
 [[bin]]
 name = "bench_v2"
 path = "src/main_v2.rs"
+
+[[bin]]
+name = "bench_binius"
+path = "src/bench_binius.rs"

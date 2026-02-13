@@ -672,10 +672,18 @@ fn main() {
         num_sets, deg_p, num_roots, num_splits, deg_qi);
     println!();
 
-    // Z is built during the Batchman protocol run, before the verifier reveals MAC keys.
+    // Z is built and committed during the Batchman protocol run,
+    // before the verifier reveals MAC keys. Not timed.
     let all_z: Vec<Vec<Val>> = all_z_roots.iter()
         .map(|r| build_z_from_roots_batched(r, &dft))
         .collect();
+    let z_domain_size = all_z[0].len().next_power_of_two();
+    let z_coeff_mat = build_multi_column_matrix(&all_z, z_domain_size);
+    let z_mat = dft.dft_batch(z_coeff_mat).to_row_major_matrix();
+    let z_domain =
+        <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, z_domain_size);
+    let (z_com, z_pdata): ComData =
+        <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(z_domain, z_mat)]);
 
     // ── PROVER WORK (all timed) ─────────────────────────────────────────
     let total_start = Instant::now();
@@ -696,16 +704,8 @@ fn main() {
         .collect();
     let build_q_time = t.elapsed();
 
-    // 2. Build multi-column matrices (2 trees)
-    //    z_tree: num_sets columns in z_domain
-    //    q_tree: K * num_sets columns in q_domain (smaller!)
-    let z_domain_size = all_z[0].len().next_power_of_two();
+    // 2. Build Q matrix: K * num_sets columns in q_domain
     let q_domain_size = 1usize << j; // = deg_qi + 1, exact zero-slack
-
-    // Z matrix: num_sets columns
-    let z_coeff_mat = build_multi_column_matrix(&all_z, z_domain_size);
-
-    // Q matrix: K * num_sets columns, ordered [Q_0_0, Q_0_1, .., Q_0_{K-1}, Q_1_0, ..]
     let mut q_polys_flat: Vec<Vec<Val>> = Vec::with_capacity(num_splits * num_sets);
     for inst in 0..num_sets {
         for split in 0..num_splits {
@@ -713,20 +713,12 @@ fn main() {
         }
     }
     let q_coeff_mat = build_multi_column_matrix(&q_polys_flat, q_domain_size);
-
-    // PCS expects evaluations on the domain, not coefficients
-    let z_mat = dft.dft_batch(z_coeff_mat).to_row_major_matrix();
     let q_mat = dft.dft_batch(q_coeff_mat).to_row_major_matrix();
-
-    let z_domain =
-        <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, z_domain_size);
     let q_domain =
         <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, q_domain_size);
 
-    // 3. Commit both trees (Q tree has K * num_sets columns in domain 2^j)
+    // 3. Commit Q tree (K * num_sets columns in domain 2^j)
     let t = Instant::now();
-    let (z_com, z_pdata): ComData =
-        <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(z_domain, z_mat)]);
     let (q_com, q_pdata): ComData =
         <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(q_domain, q_mat)]);
     let commit_time = t.elapsed();
@@ -762,7 +754,7 @@ fn main() {
     let label = |s: &str| format!("{} x{}", s, num_sets);
     let rows = [
         (label("Build Q splits"), build_q_time),
-        (format!("Commit (Z + Q[{}col])", num_splits * num_sets), commit_time),
+        (format!("Commit Q[{}col]", num_splits * num_sets), commit_time),
         ("Open 2 trees at alpha".to_string(), open_time),
     ];
 

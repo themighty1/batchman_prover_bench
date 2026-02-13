@@ -28,13 +28,19 @@ PCS mode replaces this with a three-step protocol:
 2. The verifier reveals its OT delta, allowing the prover to reconstruct the MAC keys for every branch.
 3. The prover proves that each committed value is a member of the corresponding set of verifier keys — i.e., a subset proof.
 
-This eliminates the per-branch-per-batch communication entirely. The PCS proof is ~1 MB for the entire set of MACs regardless of branch count. The trade-off is prover computation: PCS requires NTT/FFT-heavy polynomial operations that take tens of seconds on CPU. Preliminary measurements at a 100 kHz proving rate show ~20 seconds single-threaded (dominated by building the quotient polynomial from ~131K roots per instance via subproduct tree, optimized with split-commit: K smaller polynomials committed in a smaller FRI domain); CPU parallelism alone could reduce this to ~5-10 seconds, and GPU acceleration — to which NTT is naturally suited — to under one second. Minimizing PCS latency is critical since it executes only at the end of the proving pipeline and cannot be overlapped with earlier stages.
+This eliminates the per-branch-per-batch communication entirely. Using Binius FRI at 256K roots, the proof size is 407 KB (1.59 KB per 1K roots) with ~4 second prover time. The trade-off is prover computation: PCS requires NTT/FFT-heavy polynomial operations. GPU acceleration — to which NTT is naturally suited — could reduce this to under one second. Minimizing PCS latency is critical since it executes only at the end of the proving pipeline and cannot be overlapped with earlier stages.
 
 **Protocol Sequencing.** The PCS phase cannot overlap with batching execution: the prover needs the verifier's OT delta (revealed after batching completes) to reconstruct the zero MAC values for all branches before constructing the commitment polynomial.
 
 **Polynomial Commitment Degree Guarantees.** Standard FRI-based PCS constructions enforce an upper bound on polynomial degree, but our setting additionally requires preventing the prover from committing fewer values than expected. To address this, the quotient polynomial Q = P / Z is constrained to have degree exactly 2^k - 1, so the FRI domain size 2^k leaves zero slack. If the prover commits fewer roots (smaller deg(Z)), the resulting quotient exceeds degree 2^k - 1, violating the FRI bound and causing verification to fail. This zero-slack parameterization effectively turns FRI's upper bound into an exact-degree guarantee on Z.
 
 **Zero-Knowledge of the PCS.** FRI-based polynomial commitment does not provide zero-knowledge by default. We achieve hiding by padding Z with ~20 random dummy roots, so the verifier cannot distinguish real committed values from blinding values (C(520,20) ~ 2^130 brute-force security). Plonky3's built-in HidingFriPcs cannot be used here as it would destroy the tight degree bound required by our exact-degree guarantee.
+
+**Manual FRI Parameter Optimization.** Binius FRI's automatic parameter selection imposes a conservative batching limit for code simplicity, not security reasons. When committing to many polynomials simultaneously (e.g., 128 columns), this forces the prover to work in a much larger computational domain, resulting in 10-20× slower proving.
+
+We bypass this limitation by manually configuring the FRI parameters to allow higher batching while maintaining a fixed, smaller domain size. This achieves 10-20× speedup with smaller proof sizes. The manual configuration satisfies the necessary mathematical constraints for correctness, derived from the underlying FRI implementation requirements.
+
+**Security Note:** This approach requires formal soundness analysis. While the conservative batching limit appears to be a code simplification rather than a security feature, the interaction between higher batching and FRI soundness bounds over binary fields has not been formally verified. The manual parameters achieve 100-bit information-theoretic security, supplemented with 24-bit grinding for 124-bit total security.
 
 ## Optimization 2: Lifting MACs to GF(2^64) instead of GF(2^128)
 

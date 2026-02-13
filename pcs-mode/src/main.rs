@@ -128,6 +128,285 @@ fn build_z_from_roots(roots: &[Val]) -> Vec<Val> {
     z
 }
 
+/// O(n log²n) polynomial-from-roots via divide-and-conquer + FFT multiply.
+/// Falls back to naive O(n²) for small inputs where FFT overhead dominates.
+fn build_z_from_roots_fast(roots: &[Val], dft: &Dft) -> Vec<Val> {
+    if roots.len() <= 64 {
+        return build_z_from_roots(roots);
+    }
+    let mid = roots.len() / 2;
+    let left = build_z_from_roots_fast(&roots[..mid], dft);
+    let right = build_z_from_roots_fast(&roots[mid..], dft);
+    poly_mul_fft(&left, &right, dft)
+}
+
+/// O(n log²n) polynomial-from-roots using batched FFT at each tree level.
+/// At each level, all pair multiplications have the same FFT size, so we pack
+/// them into a single matrix and use dft_batch/idft_batch instead of individual
+/// dft/idft calls. This improves cache utilization and SIMD throughput.
+fn build_z_from_roots_batched(roots: &[Val], dft: &Dft) -> Vec<Val> {
+    if roots.is_empty() {
+        return vec![Val::ONE];
+    }
+
+    let base_size = 64;
+
+    // Level 0: build base-case polynomials from chunks of roots
+    let mut polys: Vec<Vec<Val>> = roots.chunks(base_size)
+        .map(|chunk| build_z_from_roots(chunk))
+        .collect();
+
+    // Iteratively combine pairs level-by-level
+    while polys.len() > 1 {
+        let num_pairs = polys.len() / 2;
+        let odd = polys.len() % 2 == 1;
+
+        if num_pairs == 0 {
+            break;
+        }
+
+        // All left polys are at even indices, rights at odd indices.
+        // Find max lengths to determine FFT size for this level.
+        let mut max_left_len = 0usize;
+        let mut max_right_len = 0usize;
+        for i in 0..num_pairs {
+            max_left_len = max_left_len.max(polys[2 * i].len());
+            max_right_len = max_right_len.max(polys[2 * i + 1].len());
+        }
+        let result_len = max_left_len + max_right_len - 1;
+        let fft_size = result_len.next_power_of_two();
+
+        // Pack lefts and rights into matrices (fft_size rows × num_pairs columns)
+        let mut left_data = vec![Val::ZERO; fft_size * num_pairs];
+        let mut right_data = vec![Val::ZERO; fft_size * num_pairs];
+        for i in 0..num_pairs {
+            for (row, &val) in polys[2 * i].iter().enumerate() {
+                left_data[row * num_pairs + i] = val;
+            }
+            for (row, &val) in polys[2 * i + 1].iter().enumerate() {
+                right_data[row * num_pairs + i] = val;
+            }
+        }
+
+        let left_mat = RowMajorMatrix::new(left_data, num_pairs);
+        let right_mat = RowMajorMatrix::new(right_data, num_pairs);
+
+        // Batch DFT both sides
+        let left_evals = dft.dft_batch(left_mat).to_row_major_matrix();
+        let right_evals = dft.dft_batch(right_mat).to_row_major_matrix();
+
+        // Pointwise multiply
+        let product_data: Vec<Val> = left_evals.values.iter()
+            .zip(right_evals.values.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
+        let product_mat = RowMajorMatrix::new(product_data, num_pairs);
+
+        // Batch IDFT
+        let result_mat = dft.idft_batch(product_mat).to_row_major_matrix();
+
+        // Extract result polynomials (truncate to result_len)
+        let mut next_level = Vec::with_capacity(num_pairs + if odd { 1 } else { 0 });
+        for col in 0..num_pairs {
+            let mut poly = Vec::with_capacity(result_len);
+            for row in 0..result_len {
+                poly.push(result_mat.values[row * num_pairs + col]);
+            }
+            next_level.push(poly);
+        }
+
+        // Carry unpaired polynomial to next level
+        if odd {
+            next_level.push(polys.last().unwrap().clone());
+        }
+
+        polys = next_level;
+    }
+
+    polys.into_iter().next().unwrap()
+}
+
+/// Split roots into K segments, build K subproduct trees with interleaved
+/// batching across all K trees at each level, then merge the K results.
+/// This ensures every dft_batch call has at least K columns, giving better
+/// utilization at the upper tree levels where a single tree has only 1-4 pairs.
+fn build_z_from_roots_split(roots: &[Val], num_segments: usize, dft: &Dft) -> Vec<Val> {
+    if roots.is_empty() {
+        return vec![Val::ONE];
+    }
+    let k = num_segments.min(roots.len()).max(1);
+
+    let base_size = 64;
+
+    // Split roots into K roughly-equal segments
+    let segment_size = (roots.len() + k - 1) / k;
+    let segments: Vec<&[Val]> = roots.chunks(segment_size).collect();
+    let actual_k = segments.len();
+
+    // Build base-case polynomials for each segment, tagged with segment index
+    // polys[i] = (segment_id, polynomial)
+    let mut polys: Vec<(usize, Vec<Val>)> = Vec::new();
+    for (seg_id, segment) in segments.iter().enumerate() {
+        for chunk in segment.chunks(base_size) {
+            polys.push((seg_id, build_z_from_roots(chunk)));
+        }
+    }
+
+    // Group by segment and combine level-by-level.
+    // At each level, we batch all pairs from ALL segments into one dft_batch call.
+    loop {
+        // Group polys by segment
+        let mut by_segment: Vec<Vec<Vec<Val>>> = vec![Vec::new(); actual_k];
+        for (seg_id, poly) in polys {
+            by_segment[seg_id].push(poly);
+        }
+
+        // Check if all segments are done (each has exactly 1 poly)
+        let all_done = by_segment.iter().all(|s| s.len() <= 1);
+        if all_done {
+            // Collect the K result polynomials and merge them
+            let results: Vec<Vec<Val>> = by_segment.into_iter()
+                .filter_map(|mut s| if s.is_empty() { None } else { Some(s.remove(0)) })
+                .collect();
+            return merge_polys(&results, dft);
+        }
+
+        // Collect all pairs across all segments for this level
+        let mut lefts: Vec<(usize, &[Val])> = Vec::new();
+        let mut rights: Vec<(usize, &[Val])> = Vec::new();
+        let mut carried: Vec<(usize, Vec<Val>)> = Vec::new();
+
+        for (seg_id, seg_polys) in by_segment.iter().enumerate() {
+            let mut i = 0;
+            while i + 1 < seg_polys.len() {
+                lefts.push((seg_id, &seg_polys[i]));
+                rights.push((seg_id, &seg_polys[i + 1]));
+                i += 2;
+            }
+            if seg_polys.len() % 2 == 1 {
+                carried.push((seg_id, seg_polys.last().unwrap().clone()));
+            }
+        }
+
+        if lefts.is_empty() {
+            // No pairs to combine, all carried — shouldn't happen if !all_done
+            polys = carried;
+            continue;
+        }
+
+        let num_pairs = lefts.len();
+
+        // Find max lengths for FFT size
+        let max_left_len = lefts.iter().map(|(_, p)| p.len()).max().unwrap();
+        let max_right_len = rights.iter().map(|(_, p)| p.len()).max().unwrap();
+        let result_len = max_left_len + max_right_len - 1;
+        let fft_size = result_len.next_power_of_two();
+
+        // Pack into matrices
+        let mut left_data = vec![Val::ZERO; fft_size * num_pairs];
+        let mut right_data = vec![Val::ZERO; fft_size * num_pairs];
+        for (col, ((_, l), (_, r))) in lefts.iter().zip(rights.iter()).enumerate() {
+            for (row, &val) in l.iter().enumerate() {
+                left_data[row * num_pairs + col] = val;
+            }
+            for (row, &val) in r.iter().enumerate() {
+                right_data[row * num_pairs + col] = val;
+            }
+        }
+
+        let left_mat = RowMajorMatrix::new(left_data, num_pairs);
+        let right_mat = RowMajorMatrix::new(right_data, num_pairs);
+
+        let left_evals = dft.dft_batch(left_mat).to_row_major_matrix();
+        let right_evals = dft.dft_batch(right_mat).to_row_major_matrix();
+
+        let product_data: Vec<Val> = left_evals.values.iter()
+            .zip(right_evals.values.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
+        let product_mat = RowMajorMatrix::new(product_data, num_pairs);
+        let result_mat = dft.idft_batch(product_mat).to_row_major_matrix();
+
+        // Extract results with segment tags
+        polys = Vec::with_capacity(num_pairs + carried.len());
+        for (col, (seg_id, _)) in lefts.iter().enumerate() {
+            let mut poly = Vec::with_capacity(result_len);
+            for row in 0..result_len {
+                poly.push(result_mat.values[row * num_pairs + col]);
+            }
+            polys.push((*seg_id, poly));
+        }
+        polys.extend(carried);
+    }
+}
+
+/// Merge K polynomials into one via batched binary-tree multiplication.
+fn merge_polys(polys: &[Vec<Val>], dft: &Dft) -> Vec<Val> {
+    if polys.is_empty() {
+        return vec![Val::ONE];
+    }
+    if polys.len() == 1 {
+        return polys[0].clone();
+    }
+
+    let mut current: Vec<Vec<Val>> = polys.to_vec();
+    while current.len() > 1 {
+        let num_pairs = current.len() / 2;
+        let odd = current.len() % 2 == 1;
+
+        if num_pairs == 0 {
+            break;
+        }
+
+        let mut max_left_len = 0usize;
+        let mut max_right_len = 0usize;
+        for i in 0..num_pairs {
+            max_left_len = max_left_len.max(current[2 * i].len());
+            max_right_len = max_right_len.max(current[2 * i + 1].len());
+        }
+        let result_len = max_left_len + max_right_len - 1;
+        let fft_size = result_len.next_power_of_two();
+
+        let mut left_data = vec![Val::ZERO; fft_size * num_pairs];
+        let mut right_data = vec![Val::ZERO; fft_size * num_pairs];
+        for i in 0..num_pairs {
+            for (row, &val) in current[2 * i].iter().enumerate() {
+                left_data[row * num_pairs + i] = val;
+            }
+            for (row, &val) in current[2 * i + 1].iter().enumerate() {
+                right_data[row * num_pairs + i] = val;
+            }
+        }
+
+        let left_mat = RowMajorMatrix::new(left_data, num_pairs);
+        let right_mat = RowMajorMatrix::new(right_data, num_pairs);
+
+        let left_evals = dft.dft_batch(left_mat).to_row_major_matrix();
+        let right_evals = dft.dft_batch(right_mat).to_row_major_matrix();
+
+        let product_data: Vec<Val> = left_evals.values.iter()
+            .zip(right_evals.values.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
+        let product_mat = RowMajorMatrix::new(product_data, num_pairs);
+        let result_mat = dft.idft_batch(product_mat).to_row_major_matrix();
+
+        let mut next = Vec::with_capacity(num_pairs + if odd { 1 } else { 0 });
+        for col in 0..num_pairs {
+            let mut poly = Vec::with_capacity(result_len);
+            for row in 0..result_len {
+                poly.push(result_mat.values[row * num_pairs + col]);
+            }
+            next.push(poly);
+        }
+        if odd {
+            next.push(current.last().unwrap().clone());
+        }
+        current = next;
+    }
+    current.into_iter().next().unwrap()
+}
+
 fn poly_mul_fft(a: &[Val], b: &[Val], dft: &Dft) -> Vec<Val> {
     let result_len = a.len() + b.len() - 1;
     let n = result_len.next_power_of_two();
@@ -278,40 +557,89 @@ fn compute_deg_p(deg_z: usize, target_ratio: usize) -> (usize, usize) {
     (deg_p, best_k)
 }
 
+/// Find the closest sweet spot to a target Z root count for a given branch count
+/// and number of committed Q splits.
+///
+/// With num_splits=K, the prover commits K polynomials Q1..QK, each of degree
+/// 2^j - 1, in a single FRI commitment over domain 2^j. Total Q capacity =
+/// K * (2^j - 1). The sweet spot maximizes Z such that ratio * Z <= K * (2^j - 1).
+///
+/// Returns (sweet_z, j, deg_qi, dummy_count):
+///   - sweet_z: the optimal Z root count
+///   - j: FRI domain exponent per split (domain = 2^j)
+///   - deg_qi: degree per Qi = 2^j - 1
+///   - dummy_count: total extra roots across all K splits for the degree bound
+fn find_sweet_spot(target_z: usize, branch_count: usize, num_splits: usize) -> (usize, usize, usize, usize) {
+    let ratio = branch_count - 1;
+
+    let mut best_z = 0usize;
+    let mut best_j = 0usize;
+    let mut best_dist = usize::MAX;
+
+    for j in 1..=30 {
+        let deg_qi = (1usize << j) - 1;
+        let total_capacity = num_splits * deg_qi;
+        let sweet_z = total_capacity / ratio;
+        if sweet_z == 0 {
+            continue;
+        }
+        let dist = if sweet_z >= target_z {
+            sweet_z - target_z
+        } else {
+            target_z - sweet_z
+        };
+        if dist < best_dist {
+            best_dist = dist;
+            best_z = sweet_z;
+            best_j = j;
+        }
+    }
+
+    let deg_qi = (1usize << best_j) - 1;
+    let total_capacity = num_splits * deg_qi;
+    let dummy_count = total_capacity - ratio * best_z;
+    (best_z, best_j, deg_qi, dummy_count)
+}
+
 fn main() {
-    let num_sets: usize = 10;
-    let input_roots: usize = 10000;
+    let num_sets: usize = 7;
+    let target_z: usize = 16000;
+    let branch_count: usize = 132;
+    // K: number of committed Q polynomials (split-commit).
+    // Sweet K = lowest proof size without a large runtime penalty.
+    // At 100 KHz proving rate with branch_count=132:
+    //   1K roots (100 sets): K=2  -> 895 KB, 21s
+    //   2K roots  (50 sets): K=2  -> 830 KB, 20s
+    //   4K roots  (25 sets): K=4  -> 811 KB, 20s
+    //   8K roots  (13 sets): K=8  -> 808 KB, 21s
+    //  16K roots   (7 sets): K=16 -> 813 KB, 23s
+    let num_splits: usize = 32;
 
-    // BabyBear is 31-bit vs Goldilocks 64-bit, so we commit 2x more roots
-    // to represent the same amount of secret data.
+    // Find optimal Z root count (sweet spot) for this branch count and split count
+    let (num_roots, j, deg_qi, dummy_count) = find_sweet_spot(target_z, branch_count, num_splits);
+    let num_q_roots_total = num_splits * deg_qi; // total Q roots across all K splits
+    let deg_p = num_roots + num_q_roots_total;
+
     #[cfg(not(any(feature = "baby-bear", feature = "koala-bear")))]
-    let (num_roots, field_name) = (input_roots, "Goldilocks (64-bit)");
+    let field_name = "Goldilocks (64-bit)";
     #[cfg(feature = "baby-bear")]
-    let (num_roots, field_name) = (input_roots * 2, "BabyBear (31-bit, 2x roots)");
+    let field_name = "BabyBear (31-bit)";
     #[cfg(feature = "koala-bear")]
-    let (num_roots, field_name) = (input_roots * 2, "KoalaBear (31-bit, 2x roots)");
+    let field_name = "KoalaBear (31-bit)";
 
-    let dft = Dft::default();
-
-    let (deg_p, k) = compute_deg_p(num_roots, 120);
-    let num_p_coeffs = deg_p + 1;
-    let deg_q = (1usize << k) - 1;
-
-    println!("=== Multi-Column Batched {}x Prover [{}] ===", num_sets, field_name);
-    println!("deg(Z)={}, deg(P)={}, deg(Q)={} (2^{}-1), ratio={:.0}x",
-        num_roots, deg_p, deg_q, k, deg_p as f64 / num_roots as f64);
-    println!("q_domain_size={} (zero slack: deg(Q)+1 = 2^{})", deg_q + 1, k);
-    println!("Each instance: {} roots out of degree ~{}", num_roots, deg_p);
+    println!("=== Split-Commit {}x Prover [{}] ===", num_sets, field_name);
+    println!("branch_count={}, target_z={} -> sweet_z={}", branch_count, target_z, num_roots);
+    println!("num_splits(K)={}, deg(Qi)={} (2^{}-1), q_domain=2^{}", num_splits, deg_qi, j, j);
+    println!("deg(Z)={}, deg(P)={}, total Q roots={}, dummies={}",
+        num_roots, deg_p, num_q_roots_total, dummy_count);
+    println!("Q columns: {}x{} = {}", num_splits, num_sets, num_splits * num_sets);
     println!();
 
+    let dft = Dft::default();
     let (pcs, base_challenger) = setup_pcs();
     let mut rng = SmallRng::seed_from_u64(42);
 
-    // For small fields like BabyBear/KoalaBear (~2^31), random roots can land
-    // on FFT domain points (roots of unity), causing Z to evaluate to zero
-    // during poly_div_fft. We reject such roots. For Goldilocks (~2^64) this
-    // almost never triggers.
-    let fft_log_size = num_p_coeffs.next_power_of_two().trailing_zeros() as usize;
+    let fft_log_size = (deg_p + 1).next_power_of_two().trailing_zeros() as usize;
     let is_root_of_unity = |x: Val| -> bool {
         let mut v = x;
         for _ in 0..fft_log_size {
@@ -321,10 +649,12 @@ fn main() {
     };
 
     print!("Setup: generating test data... ");
-    let mut all_roots = Vec::new();
-    let mut all_p = Vec::new();
+    let mut all_z_roots = Vec::new();
+    let mut all_q_root_segments: Vec<Vec<Vec<Val>>> = Vec::new(); // [instance][split][root]
+    let mut all_p_roots = Vec::new();
     for _ in 0..num_sets {
-        let roots: Vec<Val> = (0..num_roots)
+        // P's roots = branch MAC keys + dummy roots for degree bound
+        let p_roots: Vec<Val> = (0..deg_p)
             .map(|_| loop {
                 let r: Val = rng.random();
                 if r != Val::ZERO && !is_root_of_unity(r) {
@@ -332,46 +662,62 @@ fn main() {
                 }
             })
             .collect();
-        let z_setup = build_z_from_roots(&roots);
-        let q_real: Vec<Val> = (0..num_p_coeffs - num_roots)
-            .map(|_| rng.random::<Val>())
+        // Z's roots = prover's secret subset (first num_roots of P's roots)
+        let z_roots: Vec<Val> = p_roots[..num_roots].to_vec();
+        // Q's roots split into K segments of deg_qi each
+        let q_segments: Vec<Vec<Val>> = (0..num_splits)
+            .map(|s| p_roots[num_roots + s * deg_qi .. num_roots + (s + 1) * deg_qi].to_vec())
             .collect();
-        let p = poly_mul_fft(&q_real, &z_setup, &dft);
-        all_roots.push(roots);
-        all_p.push(p);
+        all_p_roots.push(p_roots);
+        all_z_roots.push(z_roots);
+        all_q_root_segments.push(q_segments);
     }
-    println!("done ({} instances, each P~{} coefficients)", num_sets, all_p[0].len());
+    println!("done ({} instances, {} P roots, {} Z roots, {}x{} Q roots/split)",
+        num_sets, deg_p, num_roots, num_splits, deg_qi);
     println!();
+
+    // Z is built during the Batchman protocol run, before the verifier reveals MAC keys.
+    let all_z: Vec<Vec<Val>> = all_z_roots.iter()
+        .map(|r| build_z_from_roots_batched(r, &dft))
+        .collect();
 
     // ── PROVER WORK (all timed) ─────────────────────────────────────────
     let total_start = Instant::now();
 
-    // 1. Build Z from secret roots
+    // 1. Build K Qi polynomials per instance (no merge across splits!)
+    //    Each Qi built from deg_qi roots using √n segmented construction.
+    //    Truncate to deg_qi+1 coeffs (merge_polys may add a trailing zero).
     let t = Instant::now();
-    let all_z: Vec<Vec<Val>> = all_roots.iter().map(|r| build_z_from_roots(r)).collect();
-    let build_z_time = t.elapsed();
-
-    // 2. Divide: Q_i = P_i / Z_i
-    let t = Instant::now();
-    let all_q: Vec<Vec<Val>> = all_p
-        .iter()
-        .zip(all_z.iter())
-        .map(|(p, z)| poly_div_fft(p, z, &dft))
+    let all_q_polys: Vec<Vec<Vec<Val>>> = all_q_root_segments.iter()
+        .map(|segments| {
+            segments.iter().map(|roots| {
+                let num_seg = (roots.len() as f64).sqrt().max(1.0) as usize;
+                let mut poly = build_z_from_roots_split(roots, num_seg, &dft);
+                poly.truncate(deg_qi + 1);
+                poly
+            }).collect()
+        })
         .collect();
-    let div_time = t.elapsed();
+    let build_q_time = t.elapsed();
 
-    // 3. Build multi-column matrices (2 trees)
-    //    z_tree: [Z1..Zn] = num_sets columns
-    //    q_tree: [Q1..Qn] = num_sets columns
+    // 2. Build multi-column matrices (2 trees)
+    //    z_tree: num_sets columns in z_domain
+    //    q_tree: K * num_sets columns in q_domain (smaller!)
     let z_domain_size = all_z[0].len().next_power_of_two();
-    let q_domain_size = all_q[0].len().next_power_of_two();
+    let q_domain_size = 1usize << j; // = deg_qi + 1, exact zero-slack
 
-    let z_polys: Vec<Vec<Val>> = all_z
-        .iter()
-        .cloned()
-        .collect();
-    let z_coeff_mat = build_multi_column_matrix(&z_polys, z_domain_size);
-    let q_coeff_mat = build_multi_column_matrix(&all_q, q_domain_size);
+    // Z matrix: num_sets columns
+    let z_coeff_mat = build_multi_column_matrix(&all_z, z_domain_size);
+
+    // Q matrix: K * num_sets columns, ordered [Q_0_0, Q_0_1, .., Q_0_{K-1}, Q_1_0, ..]
+    let mut q_polys_flat: Vec<Vec<Val>> = Vec::with_capacity(num_splits * num_sets);
+    for inst in 0..num_sets {
+        for split in 0..num_splits {
+            q_polys_flat.push(all_q_polys[inst][split].clone());
+        }
+    }
+    let q_coeff_mat = build_multi_column_matrix(&q_polys_flat, q_domain_size);
+
     // PCS expects evaluations on the domain, not coefficients
     let z_mat = dft.dft_batch(z_coeff_mat).to_row_major_matrix();
     let q_mat = dft.dft_batch(q_coeff_mat).to_row_major_matrix();
@@ -381,7 +727,7 @@ fn main() {
     let q_domain =
         <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, q_domain_size);
 
-    // 5. Commit both trees
+    // 3. Commit both trees (Q tree has K * num_sets columns in domain 2^j)
     let t = Instant::now();
     let (z_com, z_pdata): ComData =
         <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(z_domain, z_mat)]);
@@ -389,13 +735,13 @@ fn main() {
         <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(q_domain, q_mat)]);
     let commit_time = t.elapsed();
 
-    // 6. Derive challenge alpha (Fiat-Shamir over 2 commitments)
+    // 4. Derive challenge alpha (Fiat-Shamir over 2 commitments)
     let mut p_challenger = base_challenger.clone();
     p_challenger.observe(z_com.clone());
     p_challenger.observe(q_com.clone());
     let alpha: Challenge = p_challenger.sample_algebra_element();
 
-    // 7. Open both trees at alpha
+    // 5. Open both trees at alpha
     let t = Instant::now();
     let (opened_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
         &pcs,
@@ -419,9 +765,8 @@ fn main() {
     // ── Results table ───────────────────────────────────────────────────
     let label = |s: &str| format!("{} x{}", s, num_sets);
     let rows = [
-        (label("Build Z"), build_z_time),
-        (label("Divide P/Z (FFT)"), div_time),
-        ("Commit (2 trees)".to_string(), commit_time),
+        (label("Build Q splits"), build_q_time),
+        (format!("Commit (Z + Q[{}col])", num_splits * num_sets), commit_time),
         ("Open 2 trees at alpha".to_string(), open_time),
     ];
 
@@ -453,27 +798,33 @@ fn main() {
     let v_alpha: Challenge = v_challenger.sample_algebra_element();
     assert_eq!(v_alpha, alpha);
 
-    // 2. Evaluate all P_i(alpha) from public polynomials
+    // 2. Evaluate all P_i(alpha) from roots: P(α) = ∏(α - r_i)
     let t = Instant::now();
-    let p_evals: Vec<Challenge> = all_p
+    let p_evals: Vec<Challenge> = all_p_roots
         .iter()
-        .map(|p| poly_eval_at_challenge(p, v_alpha))
+        .map(|roots| {
+            roots.iter().fold(Challenge::ONE, |acc, &r| {
+                acc * (v_alpha - Challenge::from(r))
+            })
+        })
         .collect();
     let eval_p_time = t.elapsed();
 
     // 3. Extract opened values
-    //    opened_values[0] = z_tree: [0][0] = vec of num_sets Challenge values
-    //    opened_values[1] = q_tree: [1][0] = vec of num_sets Challenge values
-    //    z_tree columns: [Z1..Zn]
-    //    q_tree columns: [Q1..Qn]
-    let z_opened = &opened_values[0][0][0]; // num_sets values
-    let q_opened = &opened_values[1][0][0]; // num_sets values
+    //    z_opened: num_sets values
+    //    q_opened: K * num_sets values [Q_0_0, Q_0_1, .., Q_0_{K-1}, Q_1_0, ..]
+    let z_opened = &opened_values[0][0][0];
+    let q_opened = &opened_values[1][0][0];
 
-    // 4. Check divisibility: P_i(α) = Q_i(α) * Z_i(α)
+    // 4. Check divisibility: P_i(α) = Z_i(α) * ∏_s Qi_s(α)
     let t = Instant::now();
     for i in 0..num_sets {
         let z_val = z_opened[i];
-        let q_val = q_opened[i];
+        // Reconstruct Q_i(α) = Q_i_0(α) * Q_i_1(α) * ... * Q_i_{K-1}(α)
+        let mut q_val = Challenge::ONE;
+        for s in 0..num_splits {
+            q_val = q_val * q_opened[i * num_splits + s];
+        }
 
         assert_eq!(
             p_evals[i], q_val * z_val,

@@ -1,0 +1,195 @@
+#!/bin/bash
+#
+# Prove zkVM execution for a guest program.
+# Run without arguments to see available programs.
+#
+# Proof components:
+#
+#   Phase 1 (parallel):
+#     1. CPU step proof      (Batchman batched-disjunction, boolean circuits)
+#     2. Memory check proof  (Binius — memory access consistency + instruction lookup)
+#
+#   Phase 2 (after CPU proof, parallel with memory check if still running):
+#     3. MAC consistency proof        (Binius — IT-MAC relation)
+#     4. Step records membership proof (Binius — step record set membership)
+#     5. Zero product membership proof (Binius — zero product set membership)
+#
+
+set -e
+trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null' EXIT
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+GUEST_DIR="$DIR/minimal_isa/guest-programs"
+
+if [ $# -eq 0 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+    echo "Prove zkVM execution (all proof components)."
+    echo ""
+    echo "Usage: ./prove_zkvm <program>"
+    echo ""
+    echo "Available programs:"
+    for d in "$GUEST_DIR"/*/; do
+        name=$(basename "$d")
+        echo "  ./prove_zkvm $name"
+    done
+    echo ""
+    echo "Witness is generated automatically if not present."
+    exit 0
+fi
+
+PROGRAM="$1"
+if [ ! -d "$GUEST_DIR/$PROGRAM" ]; then
+    echo "Error: unknown program '$PROGRAM'"
+    echo "Available: $(ls "$GUEST_DIR" | tr '\n' ' ')"
+    exit 1
+fi
+WITNESS_DIR="$DIR/witgen/witness/$PROGRAM"
+
+# Generate witness if missing
+NEED_WITGEN=0
+for f in cpu_trace.bin mem_trace.bin lookup_trace.bin packed_pt.bin; do
+    [ ! -f "$WITNESS_DIR/$f" ] && NEED_WITGEN=1 && break
+done
+if [ $NEED_WITGEN -eq 1 ]; then
+    echo "Witness not found, generating..."
+    "$DIR/scripts/witgen.sh" "$PROGRAM" || { echo "Witness generation failed"; exit 1; }
+    echo ""
+fi
+
+echo "=== prove_zkvm: $PROGRAM ==="
+echo ""
+
+# Helper: parse binius Total time from a log, return seconds as float
+parse_binius_time() {
+    local log="$1"
+    local line
+    line=$(grep -P 'Total:\s+[\d.]+m?s\b' "$log" | head -1) || { echo "0"; return; }
+    if echo "$line" | grep -q 'ms'; then
+        echo "$line" | grep -oP '[\d.]+' | head -1 | awk '{printf "%.3f", $1/1000}'
+    else
+        echo "$line" | grep -oP '[\d.]+' | head -1
+    fi
+}
+
+# Helper: parse proof size in bytes from a prover log
+parse_proof_bytes() {
+    local log="$1"
+    # Try "Binius proof: N bytes" first, then "Total: N bytes", then "Proof written to ... (N bytes)"
+    local n
+    n=$(grep -oP 'Binius proof:\s+(\d+) bytes' "$log" | grep -oP '\d+' | head -1) && [ -n "$n" ] && echo "$n" && return
+    n=$(grep -oP 'Total:\s+(\d+) bytes' "$log" | grep -oP '\d+' | head -1) && [ -n "$n" ] && echo "$n" && return
+    n=$(grep -oP '\((\d+) bytes\)' "$log" | grep -oP '\d+' | tail -1) && [ -n "$n" ] && echo "$n" && return
+    echo "0"
+}
+
+# Running total proof size
+TOTAL_PROOF_BYTES=0
+
+# Build all binius binaries upfront (single cargo invocation)
+echo "Building binius binaries..."
+(cd "$DIR/binius" && cargo build --release 2>/dev/null) || {
+    echo "Error: binius build failed"
+    exit 1
+}
+BINIUS_BIN="$DIR/binius/target/release"
+
+START_NS=$(date +%s%N)
+
+# Phase 1: CPU proof + memory check in parallel
+"$DIR/scripts/prove_cpu" "$PROGRAM" > /tmp/prove_cpu.log 2>&1 &
+CPU_PID=$!
+
+(
+    cd "$DIR/binius"
+    RUST_MIN_STACK=67108864 "$BINIUS_BIN/memory_check_prover" "$PROGRAM" \
+        > /tmp/memory_check_prover.log 2>&1
+    RUST_MIN_STACK=67108864 "$BINIUS_BIN/memory_check_verifier" "$PROGRAM" \
+        > /tmp/memory_check_verifier.log 2>&1
+) &
+MEM_PID=$!
+
+# Helper: wait for a PID, check logs, print result immediately
+report_binius() {
+    local name="$1" pid="$2" prover_log="$3" verifier_log="$4" pass_pattern="$5"
+    local ok=0
+    wait "$pid" && ok=1 || true
+    if [ $ok -eq 1 ] && grep -q "$pass_pattern" "$verifier_log" 2>/dev/null; then
+        local PT VT PB
+        PT=$(parse_binius_time "$prover_log")
+        VT=$(parse_binius_time "$verifier_log")
+        PB=$(parse_proof_bytes "$prover_log")
+        TOTAL_PROOF_BYTES=$((TOTAL_PROOF_BYTES + PB))
+        local TIME_S=$(awk "BEGIN {printf \"%.1f\", $PT + $VT}")
+        local KB=$(awk "BEGIN {printf \"%.0f\", $PB / 1024}")
+        printf "  %-22s %8ss  %8s KB\n" "$name" "$TIME_S" "$KB"
+    else
+        printf "  %-22s   FAILED\n" "$name"
+        ALL_FAILED=1
+    fi
+}
+
+ALL_FAILED=0
+
+# Wait for CPU proof (needed before phase 2), report immediately
+CPU_OK=0
+wait $CPU_PID && CPU_OK=1 || true
+if [ $CPU_OK -eq 1 ] && grep -q "Verifier: PASSED" /tmp/prove_cpu.log; then
+    STEPS=$(grep -oP '\d+ steps' /tmp/prove_cpu.log | head -1)
+    CPU_MS=$(grep -oP 'Total: ([\d.]+) ms' /tmp/prove_cpu.log | grep -oP '[\d.]+' | head -1)
+    CPU_S=$(awk "BEGIN {printf \"%.1f\", $CPU_MS / 1000}")
+    CPU_BYTES=$(grep -oP 'Bytes sent: (\d+)' /tmp/prove_cpu.log | grep -oP '\d+' | head -1)
+    CPU_BYTES=${CPU_BYTES:-0}
+    TOTAL_PROOF_BYTES=$((TOTAL_PROOF_BYTES + CPU_BYTES))
+    CPU_KB=$(awk "BEGIN {printf \"%.0f\", $CPU_BYTES / 1024}")
+    CPU_COTS=$(grep -oP 'COTs: (\d+)' /tmp/prove_cpu.log | grep -oP '\d+' | head -1)
+    CPU_COTS_M=$(awk "BEGIN {printf \"%.1f\", $CPU_COTS / 1000000}")
+    printf "  %-22s %8ss  %8s KB  (%s, %sM COTs)\n" "CPU step proof" "$CPU_S" "$CPU_KB" "$STEPS" "$CPU_COTS_M"
+else
+    printf "  %-22s   FAILED\n" "CPU step proof"
+    ALL_FAILED=1
+fi
+
+# Phase 2: kick off immediately after CPU proof
+(
+    cd "$DIR/binius"
+    "$BINIUS_BIN/mac_consistency_prover" "$PROGRAM" \
+        > /tmp/mac_consistency_prover.log 2>&1
+    "$BINIUS_BIN/mac_consistency_verifier" "$PROGRAM" \
+        > /tmp/mac_consistency_verifier.log 2>&1
+) &
+MAC_PID=$!
+
+(
+    cd "$DIR/binius"
+    "$BINIUS_BIN/step_records_membership_prover" "$PROGRAM" \
+        > /tmp/step_records_prover.log 2>&1
+    "$BINIUS_BIN/step_records_membership_verifier" "$PROGRAM" \
+        > /tmp/step_records_verifier.log 2>&1
+) &
+SR_PID=$!
+
+(
+    cd "$DIR/binius"
+    "$BINIUS_BIN/zero_product_membership_prover" "$PROGRAM" \
+        > /tmp/zero_product_prover.log 2>&1
+    "$BINIUS_BIN/zero_product_membership_verifier" "$PROGRAM" \
+        > /tmp/zero_product_verifier.log 2>&1
+) &
+ZP_PID=$!
+
+# Report each as it finishes
+report_binius "Memory check" $MEM_PID /tmp/memory_check_prover.log /tmp/memory_check_verifier.log "verified successfully"
+report_binius "MAC consistency" $MAC_PID /tmp/mac_consistency_prover.log /tmp/mac_consistency_verifier.log "verified successfully"
+report_binius "Step records" $SR_PID /tmp/step_records_prover.log /tmp/step_records_verifier.log "passed"
+report_binius "Zero product" $ZP_PID /tmp/zero_product_prover.log /tmp/zero_product_verifier.log "passed"
+
+END_NS=$(date +%s%N)
+ELAPSED_MS=$(( (END_NS - START_NS) / 1000000 ))
+ELAPSED_S=$(awk "BEGIN {printf \"%.1f\", $ELAPSED_MS / 1000}")
+TOTAL_KB=$(awk "BEGIN {printf \"%.0f\", $TOTAL_PROOF_BYTES / 1024}")
+echo "  ─────────────────────────────────────────"
+printf "  %-22s %9s  %11s\n" "" "time" "proof size"
+printf "  %-22s %8ss  %8s KB\n" "Total" "$ELAPSED_S" "$TOTAL_KB"
+echo ""
+echo "  Note: COT generation cost not included. COTs are provided by an external protocol."
+
+exit $ALL_FAILED

@@ -1,0 +1,84 @@
+[package]
+name = "rv32-build"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rv32_rt"
+path = "src/lib.rs"
+
+# --- Guest program wrappers ---
+
+[[bin]]
+name = "json_query"
+path = "src/bin/json_query.rs"
+
+[[bin]]
+name = "simple_predicate"
+path = "src/bin/simple_predicate.rs"
+
+# --- Pipeline debug programs (incremental complexity) ---
+
+[[bin]]
+name = "minimal1"
+path = "src/bin/minimal1.rs"
+
+[[bin]]
+name = "minimal2"
+path = "src/bin/minimal2.rs"
+
+[[bin]]
+name = "minimal3"
+path = "src/bin/minimal3.rs"
+
+[[bin]]
+name = "minimal4"
+path = "src/bin/minimal4.rs"
+
+[[bin]]
+name = "minimal5"
+path = "src/bin/minimal5.rs"
+
+[[bin]]
+name = "phase1"
+path = "src/bin/phase1.rs"
+
+[[bin]]
+name = "phase2"
+path = "src/bin/phase2.rs"
+
+[[bin]]
+name = "phase3"
+path = "src/bin/phase3.rs"
+
+[[bin]]
+name = "phase4"
+path = "src/bin/phase4.rs"
+
+[[bin]]
+name = "phase5"
+path = "src/bin/phase5.rs"
+
+[[bin]]
+name = "phase6"
+path = "src/bin/phase6.rs"
+
+[[bin]]
+name = "phase7"
+path = "src/bin/phase7.rs"
+
+[[bin]]
+name = "phase8"
+path = "src/bin/phase8.rs"
+
+[[bin]]
+name = "phase9"
+path = "src/bin/phase9.rs"
+
+[dependencies]
+json-query = { path = "../guest-programs/json-query" }
+simple-predicate = { path = "../guest-programs/simple-predicate" }
+
+[profile.release]
+opt-level = "z"
+lto = true

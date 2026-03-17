@@ -1,2 +1,4 @@
 build/
+local-install/
+data/
 *.DS_Store

@@ -12,6 +12,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+
+[[package]]
+name = "array-util"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e509844de8f09b90a2c3444684a2b6695f4071360e13d2fda0af9f749cc2ed6"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -58,7 +73,6 @@ dependencies = [
 [[package]]
 name = "binius_compute"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "binius_field",
  "binius_math",
@@ -72,7 +86,6 @@ dependencies = [
 [[package]]
 name = "binius_core"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "assert_matches",
  "auto_impl",
@@ -106,7 +119,6 @@ dependencies = [
 [[package]]
 name = "binius_fast_compute"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "binius_compute",
  "binius_field",
@@ -125,7 +137,6 @@ dependencies = [
 [[package]]
 name = "binius_field"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "binius_maybe_rayon",
  "binius_utils",
@@ -145,7 +156,6 @@ dependencies = [
 [[package]]
 name = "binius_hal"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "binius_field",
  "binius_math",
@@ -161,7 +171,6 @@ dependencies = [
 [[package]]
 name = "binius_hash"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "binius_field",
  "binius_maybe_rayon",
@@ -177,9 +186,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "binius_m3"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "array-util",
+ "binius_compute",
+ "binius_core",
+ "binius_fast_compute",
+ "binius_field",
+ "binius_hal",
+ "binius_hash",
+ "binius_math",
+ "binius_maybe_rayon",
+ "binius_utils",
+ "bytemuck",
+ "derive_more",
+ "either",
+ "getset",
+ "itertools",
+ "thiserror",
+]
+
+[[package]]
 name = "binius_macros"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -189,7 +220,6 @@ dependencies = [
 [[package]]
 name = "binius_math"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "auto_impl",
  "binius_field",
@@ -212,17 +242,16 @@ dependencies = [
 [[package]]
 name = "binius_maybe_rayon"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "cfg-if",
  "either",
  "itertools",
+ "rayon",
 ]
 
 [[package]]
 name = "binius_ntt"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "binius_field",
  "binius_math",
@@ -237,7 +266,6 @@ dependencies = [
 [[package]]
 name = "binius_utils"
 version = "0.2.0"
-source = "git+https://github.com/IrreducibleOSS/binius#47675e19c86c0fb676f75437073a77af8e337938"
 dependencies = [
  "auto_impl",
  "binius_maybe_rayon",
@@ -267,6 +295,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq",
  "cpufeatures",
+ "rayon-core",
 ]
 
 [[package]]
@@ -352,6 +381,31 @@ checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crossbeam-deque"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crypto-common"
@@ -744,6 +798,9 @@ name = "p3-maybe-rayon"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e5669ca75645f99cd001e9d0289a4eeff2bc2cd9dc3c6c3aaf22643966e83df"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "p3-mds"
@@ -831,6 +888,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "663b16021930bc600ecada915c6c3965730a3b9d6a6c23434ccf70bfc29d6881"
 dependencies = [
+ "rayon",
  "serde",
 ]
 
@@ -844,12 +902,15 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 name = "pcs-mode"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bincode",
  "binius_compute",
  "binius_core",
+ "binius_fast_compute",
  "binius_field",
  "binius_hal",
  "binius_hash",
+ "binius_m3",
  "binius_math",
  "binius_maybe_rayon",
  "binius_ntt",
@@ -964,6 +1025,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom",
+]
+
+[[package]]
+name = "rayon"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
 ]
 
 [[package]]

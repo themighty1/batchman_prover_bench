@@ -1,0 +1,143 @@
+[package]
+name = "reg-analyzer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "reg_analyzer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reg-analyzer"
+path = "src/main.rs"
+
+[[bin]]
+name = "wasm2reg"
+path = "src/bin/wasm2reg.rs"
+
+[[bin]]
+name = "op_breakdown"
+path = "src/bin/op_breakdown.rs"
+
+[[bin]]
+name = "dynamic_trace"
+path = "src/bin/dynamic_trace.rs"
+
+[[bin]]
+name = "test_regvm"
+path = "src/bin/test_regvm.rs"
+
+[[bin]]
+name = "test_preg_vm"
+path = "src/bin/test_preg_vm.rs"
+
+[[bin]]
+name = "preg_instruction_table"
+path = "src/bin/preg_instruction_table.rs"
+
+[[bin]]
+name = "dynamic_instruction_table"
+path = "src/bin/dynamic_instruction_table.rs"
+
+[[bin]]
+name = "dump_br_tables"
+path = "src/bin/dump_br_tables.rs"
+
+[[bin]]
+name = "trace_to_file"
+path = "src/bin/trace_to_file.rs"
+
+[[bin]]
+name = "wasmi_json_test"
+path = "src/bin/wasmi_json_test.rs"
+
+[[bin]]
+name = "specialized_ops"
+path = "src/bin/specialized_ops.rs"
+
+[[bin]]
+name = "test_transform"
+path = "src/bin/test_transform.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+wasmparser = "0.244.0"
+wasmi = "0.40"
+serde_json = "1.0"
+regalloc2 = "0.13.5"
+rvdc = "0.1"
+object = { version = "0.36", default-features = false, features = ["elf", "read"] }
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+
+[[bin]]
+name = "rv32_decode"
+path = "src/bin/rv32_decode.rs"
+
+[[bin]]
+name = "rv32_regalloc_test"
+path = "src/bin/rv32_regalloc_test.rs"
+
+[[bin]]
+name = "rv32_execute"
+path = "src/bin/rv32_execute.rs"
+
+[[bin]]
+name = "rv32_isa_execute"
+path = "src/bin/rv32_isa_execute.rs"
+
+[[bin]]
+name = "rv32_toy_test"
+path = "src/bin/rv32_toy_test.rs"
+
+[[bin]]
+name = "rv32_vreg_validate"
+path = "src/bin/rv32_vreg_validate.rs"
+
+[[bin]]
+name = "rv32_verify"
+path = "src/bin/rv32_verify.rs"
+
+[[bin]]
+name = "rv32_compile"
+path = "src/bin/rv32_compile.rs"
+
+[[bin]]
+name = "rv32_run"
+path = "src/bin/rv32_run.rs"
+
+[[bin]]
+name = "rv32_compile_flat"
+path = "src/bin/rv32_compile_flat.rs"
+
+[[bin]]
+name = "rv32_compile_canonical"
+path = "src/bin/rv32_compile_canonical.rs"
+
+[[bin]]
+name = "rv32_run_canon"
+path = "src/bin/rv32_run_canon.rs"
+
+[[bin]]
+name = "rv32_compile_canon3"
+path = "src/bin/rv32_compile_canon3.rs"
+
+[[bin]]
+name = "rv32_run_canon3"
+path = "src/bin/rv32_run_canon3.rs"
+
+[[bin]]
+name = "rv32_compile_canon4"
+path = "src/bin/rv32_compile_canon4.rs"
+
+[[bin]]
+name = "rv32_run_canon4"
+path = "src/bin/rv32_run_canon4.rs"
+
+[[bin]]
+name = "rv32_run_flat"
+path = "src/bin/rv32_run_flat.rs"
+
+[[bin]]
+name = "analyze_imm"
+path = "src/bin/analyze_imm.rs"

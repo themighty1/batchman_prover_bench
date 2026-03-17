@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""
+Parallel CPU step proof: splits trace into 10K-step segments and proves
+each segment in parallel (max 2 concurrent prover/verifier pairs).
+"""
+
+import os
+import sys
+import struct
+import math
+import subprocess
+import time
+import signal
+import re
+import tempfile
+import shutil
+
+SEGMENT_SIZE = 10_000
+MAX_CONCURRENT = 2
+BASE_PORT = 20000
+
+def find_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+def split_trace(trace_path, seg_size, out_dir):
+    """Split cpu_trace.bin and packed_pt.bin into segments."""
+    with open(trace_path, 'rb') as f:
+        count = struct.unpack('<I', f.read(4))[0]
+        data = f.read()
+
+    num_seg = math.ceil(count / seg_size)
+    segments = []
+
+    for k in range(num_seg):
+        start = k * seg_size
+        end = min((k + 1) * seg_size, count)
+        seg_count = end - start
+
+        seg_dir = os.path.join(out_dir, f"seg{k}")
+        os.makedirs(seg_dir, exist_ok=True)
+
+        # Write cpu_trace segment
+        seg_path = os.path.join(seg_dir, 'cpu_trace.bin')
+        with open(seg_path, 'wb') as f:
+            f.write(struct.pack('<I', seg_count))
+            f.write(data[start * 28 : end * 28])
+
+        # Write packed_pt segment if source exists
+        pt_path = os.path.join(os.path.dirname(trace_path), 'packed_pt.bin')
+        if os.path.exists(pt_path):
+            with open(pt_path, 'rb') as f:
+                f.read(4)  # skip header
+                pt_data = f.read()
+            seg_pt = os.path.join(seg_dir, 'packed_pt.bin')
+            with open(seg_pt, 'wb') as f:
+                f.write(struct.pack('<I', seg_count))
+                f.write(pt_data[start * 16 : end * 16])
+
+        segments.append((k, seg_count, seg_dir))
+
+    return segments
+
+
+def run_segment(binary, circuit_dir, seg_dir, port, seg_idx):
+    """Launch prover+verifier for one segment. Returns (seg_idx, prover_log, verifier_log, ok)."""
+    trace = os.path.join(seg_dir, 'cpu_trace.bin')
+    with open(trace, 'rb') as f:
+        steps = struct.unpack('<I', f.read(4))[0]
+
+    v_log = os.path.join(seg_dir, 'verifier.log')
+    p_log = os.path.join(seg_dir, 'prover.log')
+
+    with open(v_log, 'w') as vf, open(p_log, 'w') as pf:
+        verifier = subprocess.Popen(
+            [binary, '2', str(port), '127.0.0.1', str(steps), circuit_dir, trace],
+            stdout=vf, stderr=subprocess.STDOUT)
+        time.sleep(0.3)
+        prover = subprocess.Popen(
+            [binary, '1', str(port), '127.0.0.1', str(steps), circuit_dir, trace],
+            stdout=pf, stderr=subprocess.STDOUT)
+
+    prover.wait()
+    verifier.wait()
+
+    ok = prover.returncode == 0 and verifier.returncode == 0
+    return seg_idx, steps, p_log, ok
+
+
+def parse_prover_log(log_path):
+    """Extract timing, COTs, bytes from prover log."""
+    try:
+        text = open(log_path).read()
+    except:
+        return {}
+
+    result = {}
+    m = re.search(r'Total: ([\d.]+) ms', text)
+    if m: result['ms'] = float(m.group(1))
+    m = re.search(r'COTs: (\d+)', text)
+    if m: result['cots'] = int(m.group(1))
+    m = re.search(r'Bytes sent: (\d+)', text)
+    if m: result['bytes'] = int(m.group(1))
+    return result
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+        print("Usage: prove_cpu_parallel <program> [concurrency]")
+        print(f"  Splits trace into {SEGMENT_SIZE}-step segments.")
+        print(f"  concurrency: max parallel prover/verifier pairs (default: {MAX_CONCURRENT})")
+        sys.exit(0)
+
+    program = sys.argv[1]
+    concurrency = int(sys.argv[2]) if len(sys.argv) > 2 else MAX_CONCURRENT
+    root = find_root()
+    binary = os.path.join(root, 'build', 'bin', 'test_bench_batchman_bool')
+    circuit_dir = os.path.join(root, 'circuits', 'generated')
+    witness_dir = os.path.join(root, 'witgen', 'witness', program)
+    cpu_trace = os.path.join(witness_dir, 'cpu_trace.bin')
+
+    if not os.path.exists(cpu_trace):
+        print(f"Error: {cpu_trace} not found")
+        sys.exit(1)
+
+    # Build if needed
+    if not os.path.exists(binary):
+        print("Building Batchman binary...")
+        build_dir = os.path.join(root, 'build')
+        os.makedirs(build_dir, exist_ok=True)
+        subprocess.run(['cmake', '..'], cwd=build_dir, capture_output=True)
+        subprocess.run(['make', '-j4', 'test_bench_batchman_bool'], cwd=build_dir, capture_output=True)
+
+    if not os.path.exists(os.path.join(circuit_dir, 'add.bin')):
+        print("Generating circuit files...")
+        subprocess.run(['cargo', 'run', '--release'], cwd=os.path.join(root, 'circuits'), capture_output=True)
+
+    # Split trace
+    tmp_dir = tempfile.mkdtemp(prefix='prove_cpu_seg_')
+    segments = split_trace(cpu_trace, SEGMENT_SIZE, tmp_dir)
+    print(f"  {len(segments)} segments of up to {SEGMENT_SIZE} steps, concurrency {concurrency}")
+
+    start_time = time.time()
+
+    # Prove segments with concurrency limit
+    results = [None] * len(segments)
+    children = []  # track all child processes for cleanup
+
+    def cleanup():
+        for p in children:
+            try: p.kill()
+            except: pass
+
+    signal.signal(signal.SIGINT, lambda *_: (cleanup(), sys.exit(1)))
+    signal.signal(signal.SIGTERM, lambda *_: (cleanup(), sys.exit(1)))
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def prove_seg(seg):
+        k, count, seg_dir = seg
+        port = BASE_PORT + 2 * k
+        return run_segment(binary, circuit_dir, seg_dir, port, k)
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(prove_seg, seg): seg for seg in segments}
+        for future in as_completed(futures):
+            seg_idx, steps, p_log, ok = future.result()
+            results[seg_idx] = (steps, p_log, ok)
+
+            if ok:
+                info = parse_prover_log(p_log)
+                secs = info.get('ms', 0) / 1000
+                cots = info.get('cots', 0)
+                printf_str = f"  segment {seg_idx:>2}:  {steps:>6} steps  {secs:>6.1f}s  {cots} COTs"
+                print(printf_str)
+            else:
+                print(f"  segment {seg_idx:>2}:  FAILED (see {p_log})")
+
+    wall = time.time() - start_time
+
+    # Summary
+    total_steps = sum(r[0] for r in results if r)
+    total_cots = sum(parse_prover_log(r[1]).get('cots', 0) for r in results if r and r[2])
+    total_bytes = sum(parse_prover_log(r[1]).get('bytes', 0) for r in results if r and r[2])
+    all_ok = all(r and r[2] for r in results)
+
+    cots_m = total_cots / 1_000_000
+    total_kb = total_bytes // 1024
+
+    print("  ─────────────────────────────────────────")
+    print(f"  Total: {total_steps} steps, {cots_m:.1f}M COTs, {total_kb} KB, wall {wall:.1f}s")
+
+    # Cleanup
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if all_ok:
+        print(f"  All {len(segments)} segments: PASSED")
+    else:
+        print("  Some segments FAILED")
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

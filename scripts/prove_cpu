@@ -1,0 +1,90 @@
+#!/bin/bash
+#
+# Prove CPU step execution using the Batchman batched-disjunction protocol.
+#
+# This proves that every CPU step in the witness trace correctly evaluates one
+# of the 51 ISA circuit branches. Memory access consistency and instruction
+# lookup are proved separately with the Binius provers in binius/.
+#
+# Witness data must be generated ahead of time with ./witgen.sh <program>.
+#
+
+trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null' EXIT
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BINARY="$DIR/build/bin/test_bench_batchman_bool"
+CIRCUIT_DIR="$DIR/circuits/generated"
+
+if [ $# -eq 0 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+    echo "Prove CPU step execution (Batchman batched-disjunction, boolean circuits)."
+    echo ""
+    echo "This proves correct evaluation of each CPU step against ISA circuit branches."
+    echo "Memory consistency and instruction lookup are proved separately (see binius/)."
+    echo ""
+    echo "Usage: ./prove_cpu <program>    Prove all steps for <program>"
+    echo "       ./prove_cpu build        Build the prover/verifier binary"
+    echo ""
+    echo "The <program> name is used to locate witness data at:"
+    echo "  witgen/witness/<program>/cpu_trace.bin"
+    echo ""
+    echo "Generate witness first:  ./witgen.sh <program>"
+    echo ""
+    echo "Examples:"
+    echo "  ./prove_cpu json-query"
+    echo "  ./prove_cpu simple-predicate"
+    echo "  ./prove_cpu build"
+    exit 0
+fi
+
+# Build command
+if [ "$1" == "build" ]; then
+    echo "Building bool benchmark..."
+    cd "$DIR/build" && cmake .. && make -j4 test_bench_batchman_bool
+    exit $?
+fi
+
+# Check binary exists
+if [ ! -f "$BINARY" ]; then
+    echo "Building Batchman binary..."
+    mkdir -p "$DIR/build" && cd "$DIR/build" && cmake .. > /dev/null 2>&1 && make -j4 test_bench_batchman_bool > /dev/null 2>&1 || {
+        echo "Error: build failed"; exit 1;
+    }
+fi
+
+# Generate circuit .bin files if missing
+if [ ! -f "$CIRCUIT_DIR/add.bin" ] || [ ! -d "$CIRCUIT_DIR" ]; then
+    echo "Generating circuit files..."
+    (cd "$DIR/circuits" && cargo run --release > /dev/null 2>&1) || {
+        echo "Error: circuit generation failed"; exit 1;
+    }
+fi
+
+PROGRAM="$1"
+PORT=12348
+
+# Witness path from program name
+CPU_TRACE="$DIR/witgen/witness/$PROGRAM/cpu_trace.bin"
+if [ ! -f "$CPU_TRACE" ]; then
+    echo "Error: Witness not found: $CPU_TRACE"
+    echo "Run './witgen.sh $PROGRAM' first."
+    exit 1
+fi
+
+# Read step count from trace header (first 4 bytes, little-endian u32)
+STEPS=$(od -A n -t u4 -N 4 "$CPU_TRACE" | tr -d ' ')
+
+($BINARY 2 $PORT 127.0.0.1 $STEPS "$CIRCUIT_DIR" "$CPU_TRACE" > /tmp/bool_verifier.log 2>&1) &
+VERIFIER_PID=$!
+sleep 0.5
+$BINARY 1 $PORT 127.0.0.1 $STEPS "$CIRCUIT_DIR" "$CPU_TRACE"
+
+wait $VERIFIER_PID
+VERIFIER_EXIT=$?
+
+echo ""
+if [ $VERIFIER_EXIT -eq 0 ]; then
+    echo "Verifier: PASSED"
+else
+    echo "Verifier: FAILED (exit code $VERIFIER_EXIT)"
+    echo "Verifier log:"
+    cat /tmp/bool_verifier.log
+fi

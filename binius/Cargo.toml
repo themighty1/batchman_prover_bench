@@ -1,0 +1,85 @@
+[package]
+name = "memory-checker-and-lookup"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["rayon"]
+rayon = [
+    "binius_core/rayon",
+    "binius_fast_compute/rayon",
+    "binius_field/rayon",
+    "binius_hal/rayon",
+    "binius_hash/rayon",
+    "binius_m3/rayon",
+    "binius_math/rayon",
+    "binius_ntt/rayon",
+    "binius_utils/rayon",
+]
+
+[dependencies]
+anyhow = "1.0"
+batchman_witness_generator = { path = "../witgen" }
+blake3 = "1.5"
+digest = "0.10"
+rand = { version = "0.9.1", features = ["std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Binius dependencies (patched fork)
+binius_compute = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_core = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_fast_compute = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_field = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_hal = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_hash = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_m3 = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_math = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_ntt = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_utils = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", default-features = false }
+
+# Pin zerocopy to version compatible with nightly-2025-05-10
+zerocopy = "=0.8.26"
+
+[lib]
+name = "memory_checker_and_lookup"
+path = "src/lib.rs"
+
+[[bin]]
+name = "memory_check_prover"
+path = "src/memory_check_prover.rs"
+
+[[bin]]
+name = "memory_check_verifier"
+path = "src/memory_check_verifier.rs"
+
+[[bin]]
+name = "mac_consistency_prover"
+path = "src/mac_consistency_prover.rs"
+
+[[bin]]
+name = "mac_consistency_verifier"
+path = "src/mac_consistency_verifier.rs"
+
+[[bin]]
+name = "zero_product_membership_prover"
+path = "src/zero_product_membership_prover.rs"
+
+[[bin]]
+name = "zero_product_membership_verifier"
+path = "src/zero_product_membership_verifier.rs"
+
+[[bin]]
+name = "step_records_membership_prover"
+path = "src/step_records_membership_prover.rs"
+
+[[bin]]
+name = "step_records_membership_verifier"
+path = "src/step_records_membership_verifier.rs"
+
+[[bin]]
+name = "bench_fri"
+path = "src/bench_fri.rs"
+
+[profile.release]
+lto = "thin"

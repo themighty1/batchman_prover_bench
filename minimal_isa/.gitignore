@@ -1,0 +1,5 @@
+/target
+**/target
+*.bin
+*.elf
+!/guest-programs/*/fixtures/*

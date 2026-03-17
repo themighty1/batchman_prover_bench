@@ -1,0 +1,10 @@
+[package]
+name = "batchman_witness_generator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+reg-analyzer = { path = "../minimal_isa/reg-analyzer" }

@@ -4,6 +4,7 @@
 #include "emp-zk/emp-zk-bool/emp-zk-bool.h"
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 
 namespace emp {
 
@@ -216,6 +217,14 @@ public:
     // When true, both parties evaluate all branches per step (fills proofs[]/values[]).
     // When false, prover walks only the active branch (v_tokens/alpha_tokens).
     bool evaluate_all_branches = true;
+
+    // Segment-based parallel proving.
+    // segment_size: number of steps per segment (0 = no segmentation).
+    // max_concurrent_segments: max segments proved in parallel via OpenMP.
+    // on_segment_done: called when a segment finishes (seg_idx, seg_start, seg_end).
+    int segment_size = 0;
+    int max_concurrent_segments = 2;
+    std::function<void(int seg_idx, int seg_start, int seg_end)> on_segment_done = nullptr;
 
     BoolBatchedDisjunction(IO **ios, int party, int input_count, int mul_count,
                            int branch_sz, int batch_sz, int connect_count = -1)
@@ -714,128 +723,141 @@ public:
             // All-branch mode: both parties walk every branch per step.
             // proofs[batch_id * branch_sz + bid] = topology token (MAC for prover, Key for verifier)
             // values[batch_id * branch_sz + bid] = cleartext value token (prover only)
-            for (int batch_id = 0; batch_id < batch_sz; batch_id++) {
-                long long in_off  = (long long)batch_id * input_count;
-                long long mul_off = (long long)batch_id * mul_count;
 
-                // MAC/Key walk: both parties walk ALL branches
-                for (int bid = 0; bid < branch_sz; bid++) {
-                    int gc = gate_count_per_branch[bid];
-                    int one_wire_idx = input_count + gc;
+            // Segment-based parallelism: split steps into segments, process
+            // up to max_concurrent_segments in parallel via OpenMP.
+            int seg_sz = (segment_size > 0) ? segment_size : batch_sz;
+            int num_segments = (batch_sz + seg_sz - 1) / seg_sz;
+            int max_threads = (segment_size > 0) ? max_concurrent_segments : 1;
 
-                    block *pw = new block[one_wire_idx + 1];
-                    pw[one_wire_idx] = one.bit;
-                    for (int i = 0; i < input_count; i++)
-                        pw[i] = inputs[in_off + i].bit;
+            #pragma omp parallel for schedule(dynamic, 1) num_threads(max_threads)
+            for (int seg = 0; seg < num_segments; seg++) {
+                int seg_start = seg * seg_sz;
+                int seg_end = std::min(seg_start + seg_sz, batch_sz);
 
-                    __m128i proof_acc = _mm_setzero_si128(); // unreduced accumulator
-                    int and_idx = 0;
-                    for (int g = 0; g < gc; g++) {
-                        int l = wire_left[bid][g], r = wire_right[bid][g];
-                        switch (gate_type[bid][g]) {
-                            case GATE_XOR:
-                                pw[input_count + g] = pw[l] ^ pw[r];
-                                break;
-                            case GATE_INV:
-                                pw[input_count + g] = pw[l] ^ pw[one_wire_idx];
-                                break;
-                            case GATE_AND: {
-                                block diff_l = lo64(mul_le[mul_off + and_idx].bit ^ pw[l]);
-                                proof_acc = _mm_xor_si128(proof_acc, clmul64(chis[and_idx], diff_l));
+                for (int batch_id = seg_start; batch_id < seg_end; batch_id++) {
+                    long long in_off  = (long long)batch_id * input_count;
+                    long long mul_off = (long long)batch_id * mul_count;
 
-                                block diff_r = lo64(mul_ri[mul_off + and_idx].bit ^ pw[r]);
-                                proof_acc = _mm_xor_si128(proof_acc, clmul64(chis[mul_count + and_idx], diff_r));
-
-                                pw[input_count + g] = mul_ou[mul_off + and_idx].bit;
-                                and_idx++;
-                                break;
-                            }
-                        }
-                    }
-
-                    // Connection proof (only first connect_count positions)
-                    if (batch_sz > 1 && batch_id < batch_sz - 1) {
-                        long long in_off_next = (long long)(batch_id + 1) * input_count;
-                        for (int i = 0; i < connect_count; i++) {
-                            long long chi_idx = (long long)batch_id * connect_count + i;
-                            block prev_output = (output_source[bid][i] < 0)
-                                ? pw[i]
-                                : pw[input_count + output_source[bid][i]];
-                            block diff = lo64(inputs[in_off_next + i].bit ^ prev_output);
-                            proof_acc = _mm_xor_si128(proof_acc, clmul64(conn_chi[chi_idx], diff));
-                        }
-                    }
-
-                    proofs[batch_id * branch_sz + bid] = reduce64(proof_acc);
-
-                    // Authenticated step record: pack 126 bit-MACs into one
-                    // GF(2^128) IT-MAC. Committed here, opened later in binius
-                    // to prove memory accesses and instruction lookups.
-                    if (const_gate_idx[bid] != nullptr)
-                        step_records[batch_id * branch_sz + bid] = compute_step_record(pw, bid);
-
-                    delete[] pw;
-                }
-
-                // Prover only: cleartext value walk for values[]
-                if (party == ALICE) {
+                    // MAC/Key walk: both parties walk ALL branches
                     for (int bid = 0; bid < branch_sz; bid++) {
                         int gc = gate_count_per_branch[bid];
                         int one_wire_idx = input_count + gc;
 
-                        bool *cw = new bool[one_wire_idx + 1];
-                        cw[one_wire_idx] = true;
+                        block *pw = new block[one_wire_idx + 1];
+                        pw[one_wire_idx] = one.bit;
                         for (int i = 0; i < input_count; i++)
-                            cw[i] = input_vals[in_off + i];
+                            pw[i] = inputs[in_off + i].bit;
 
-                        block value = makeBlock(0, 0);
+                        __m128i proof_acc = _mm_setzero_si128();
                         int and_idx = 0;
                         for (int g = 0; g < gc; g++) {
                             int l = wire_left[bid][g], r = wire_right[bid][g];
                             switch (gate_type[bid][g]) {
                                 case GATE_XOR:
-                                    cw[input_count + g] = cw[l] ^ cw[r];
+                                    pw[input_count + g] = pw[l] ^ pw[r];
                                     break;
                                 case GATE_INV:
-                                    cw[input_count + g] = !cw[l];
+                                    pw[input_count + g] = pw[l] ^ pw[one_wire_idx];
                                     break;
                                 case GATE_AND: {
-                                    bool val_l = mul_le_vals[mul_off + and_idx];
-                                    bool val_r = mul_ri_vals[mul_off + and_idx];
-                                    if (val_l != cw[l])
-                                        value = value ^ chis[and_idx];
-                                    if (val_r != cw[r])
-                                        value = value ^ chis[mul_count + and_idx];
-                                    cw[input_count + g] = val_l & val_r;
+                                    block diff_l = lo64(mul_le[mul_off + and_idx].bit ^ pw[l]);
+                                    proof_acc = _mm_xor_si128(proof_acc, clmul64(chis[and_idx], diff_l));
+
+                                    block diff_r = lo64(mul_ri[mul_off + and_idx].bit ^ pw[r]);
+                                    proof_acc = _mm_xor_si128(proof_acc, clmul64(chis[mul_count + and_idx], diff_r));
+
+                                    pw[input_count + g] = mul_ou[mul_off + and_idx].bit;
                                     and_idx++;
                                     break;
                                 }
                             }
                         }
 
-                        // Connection value (only first connect_count positions)
+                        // Connection proof (only first connect_count positions)
                         if (batch_sz > 1 && batch_id < batch_sz - 1) {
+                            long long in_off_next = (long long)(batch_id + 1) * input_count;
                             for (int i = 0; i < connect_count; i++) {
                                 long long chi_idx = (long long)batch_id * connect_count + i;
-                                bool prev_out = (output_source[bid][i] < 0)
-                                    ? cw[i]
-                                    : cw[input_count + output_source[bid][i]];
-                                bool next_in = input_vals[(long long)(batch_id + 1) * input_count + i];
-                                if (next_in != prev_out)
-                                    value = value ^ conn_chi[chi_idx];
+                                block prev_output = (output_source[bid][i] < 0)
+                                    ? pw[i]
+                                    : pw[input_count + output_source[bid][i]];
+                                block diff = lo64(inputs[in_off_next + i].bit ^ prev_output);
+                                proof_acc = _mm_xor_si128(proof_acc, clmul64(conn_chi[chi_idx], diff));
                             }
                         }
 
-                        values[batch_id * branch_sz + bid] = value;
+                        proofs[batch_id * branch_sz + bid] = reduce64(proof_acc);
 
-                        // Compute plaintext step record for all branches
                         if (const_gate_idx[bid] != nullptr)
-                            step_record_plaintexts[(long long)batch_id * branch_sz + bid] = compute_step_record_plaintext(cw, bid);
+                            step_records[batch_id * branch_sz + bid] = compute_step_record(pw, bid);
 
-                        delete[] cw;
+                        delete[] pw;
                     }
-                }
-            }
+
+                    // Prover only: cleartext value walk for values[]
+                    if (party == ALICE) {
+                        for (int bid = 0; bid < branch_sz; bid++) {
+                            int gc = gate_count_per_branch[bid];
+                            int one_wire_idx = input_count + gc;
+
+                            bool *cw = new bool[one_wire_idx + 1];
+                            cw[one_wire_idx] = true;
+                            for (int i = 0; i < input_count; i++)
+                                cw[i] = input_vals[in_off + i];
+
+                            block value = makeBlock(0, 0);
+                            int and_idx = 0;
+                            for (int g = 0; g < gc; g++) {
+                                int l = wire_left[bid][g], r = wire_right[bid][g];
+                                switch (gate_type[bid][g]) {
+                                    case GATE_XOR:
+                                        cw[input_count + g] = cw[l] ^ cw[r];
+                                        break;
+                                    case GATE_INV:
+                                        cw[input_count + g] = !cw[l];
+                                        break;
+                                    case GATE_AND: {
+                                        bool val_l = mul_le_vals[mul_off + and_idx];
+                                        bool val_r = mul_ri_vals[mul_off + and_idx];
+                                        if (val_l != cw[l])
+                                            value = value ^ chis[and_idx];
+                                        if (val_r != cw[r])
+                                            value = value ^ chis[mul_count + and_idx];
+                                        cw[input_count + g] = val_l & val_r;
+                                        and_idx++;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Connection value (only first connect_count positions)
+                            if (batch_sz > 1 && batch_id < batch_sz - 1) {
+                                for (int i = 0; i < connect_count; i++) {
+                                    long long chi_idx = (long long)batch_id * connect_count + i;
+                                    bool prev_out = (output_source[bid][i] < 0)
+                                        ? cw[i]
+                                        : cw[input_count + output_source[bid][i]];
+                                    bool next_in = input_vals[(long long)(batch_id + 1) * input_count + i];
+                                    if (next_in != prev_out)
+                                        value = value ^ conn_chi[chi_idx];
+                                }
+                            }
+
+                            values[batch_id * branch_sz + bid] = value;
+
+                            if (const_gate_idx[bid] != nullptr)
+                                step_record_plaintexts[(long long)batch_id * branch_sz + bid] = compute_step_record_plaintext(cw, bid);
+
+                            delete[] cw;
+                        }
+                    }
+                } // end batch_id loop
+
+                // Segment complete — notify callback
+                if (on_segment_done)
+                    on_segment_done(seg, seg_start, seg_end);
+            } // end segment loop
         } else {
         // Active-branch-only mode: prover walks only the active branch.
         // Uses t-challenge fingerprints; outputs v_tokens/alpha_tokens.

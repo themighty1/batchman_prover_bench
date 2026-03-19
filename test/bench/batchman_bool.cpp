@@ -567,6 +567,16 @@ void test_zk(BoolIO<NetIO> *ios[threads], int party,
     ios[0]->recv_counter = 0;
     auto start = clock_start();
 
+    // Configure segment-based parallel proving.
+    // SEGMENT_SIZE env var controls steps per segment (default: 0 = no segmentation).
+    // CONCURRENCY env var controls max parallel segments (default: 2).
+    {
+        const char *seg_env = getenv("SEGMENT_SIZE");
+        const char *conc_env = getenv("CONCURRENCY");
+        if (seg_env) protocol.segment_size = atoi(seg_env);
+        if (conc_env) protocol.max_concurrent_segments = atoi(conc_env);
+    }
+
     protocol.authenticate_and_multiply();
     protocol.generate_proofs();
 

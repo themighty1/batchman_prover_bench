@@ -14,6 +14,7 @@ import time
 import tempfile
 import shutil
 import signal
+import threading
 
 SEGMENT_SIZE = 10_000
 CONCURRENCY = 2
@@ -127,7 +128,6 @@ def main():
             mv.wait()
             return mv.returncode == 0
 
-    import threading
     mem_result = [None]
     def mem_thread():
         mem_result[0] = run_memory_check()
@@ -143,10 +143,32 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: (cleanup(), sys.exit(1)))
     signal.signal(signal.SIGTERM, lambda *_: (cleanup(), sys.exit(1)))
 
+    # PCS client — connect to server if available
+    segment_keys_bin = os.path.join(root, 'witgen', 'target', 'release', 'segment_keys')
+    pcs_client = None
+    try:
+        from pcs_client import PCSClient, compute_segment_keys
+        pcs_client = PCSClient()
+        print("  Connected to PCS server")
+    except Exception:
+        pass  # PCS server not running, skip
+
+    def process_segment(seg_idx, seg_dir):
+        """Compute keys and send to PCS server for a completed segment."""
+        if pcs_client is None or not os.path.exists(segment_keys_bin):
+            return
+        try:
+            active_macs, all_keys = compute_segment_keys(seg_dir, segment_keys_bin)
+            pcs_client.send_z_roots(active_macs)
+            pcs_client.send_q_roots(all_keys)
+        except Exception as e:
+            print(f"  WARNING: PCS send failed for segment {seg_idx}: {e}")
+
     # Monitor segment completion
     start = time.time()
     seen = set()
     cpu_done = False
+    pcs_threads = []
 
     while not cpu_done:
         # Check for new segment.done markers
@@ -159,7 +181,16 @@ def main():
                 elapsed = time.time() - start
                 seg_start = seg * SEGMENT_SIZE
                 seg_end = min(seg_start + SEGMENT_SIZE, total_steps)
-                print(f"  segment {seg:>2}: {seg_end-seg_start:>5} steps  done at {elapsed:.1f}s")
+                seg_dir = os.path.join(seg_out, f'seg_{seg}')
+
+                pcs_tag = ""
+                if pcs_client:
+                    t = threading.Thread(target=process_segment, args=(seg, seg_dir))
+                    t.start()
+                    pcs_threads.append(t)
+                    pcs_tag = " → PCS"
+
+                print(f"  segment {seg:>2}: {seg_end-seg_start:>5} steps  done at {elapsed:.1f}s{pcs_tag}")
 
         # Check if batchman finished
         if p.poll() is not None and v.poll() is not None:
@@ -175,6 +206,14 @@ def main():
         print(f"  CPU proof: {num_segments} segments in {cpu_wall:.1f}s")
     else:
         print(f"  CPU proof FAILED (prover={p.returncode}, verifier={v.returncode})")
+
+    # Wait for PCS sends to complete
+    for t in pcs_threads:
+        t.join()
+    if pcs_client:
+        pcs_wall = time.time() - start
+        print(f"  PCS data sent: {len(pcs_threads)} segments ({pcs_wall:.1f}s)")
+        pcs_client.close()
 
     # Wait for memory check
     mt.join()

@@ -72,6 +72,12 @@ def main():
         print("Generating circuit files...")
         subprocess.run(['cargo', 'run', '--release'], cwd=os.path.join(root, 'circuits'), capture_output=True)
 
+    # Build binius binaries
+    binius_dir = os.path.join(root, 'binius')
+    binius_bin = os.path.join(binius_dir, 'target', 'release')
+    print("  Building binius binaries...")
+    subprocess.run(['cargo', 'build', '--release'], cwd=binius_dir, capture_output=True)
+
     # Launch Batchman prover + verifier
     env = os.environ.copy()
     env['SEGMENT_SIZE'] = str(SEGMENT_SIZE)
@@ -101,12 +107,38 @@ def main():
             stdout=pf, stderr=subprocess.STDOUT, env=env)
         procs.append(p)
 
+    # Memory check (runs in parallel with Batchman, independent of segments)
+    mem_prover_log = os.path.join(seg_out, 'memory_check_prover.log')
+    mem_verifier_log = os.path.join(seg_out, 'memory_check_verifier.log')
+    mem_env = {'RUST_MIN_STACK': '67108864', **os.environ}
+
+    def run_memory_check():
+        with open(mem_prover_log, 'w') as f:
+            mp = subprocess.Popen(
+                [os.path.join(binius_bin, 'memory_check_prover'), program],
+                stdout=f, stderr=subprocess.STDOUT, env=mem_env, cwd=binius_dir)
+            procs.append(mp)
+            mp.wait()
+        with open(mem_verifier_log, 'w') as f:
+            mv = subprocess.Popen(
+                [os.path.join(binius_bin, 'memory_check_verifier'), program],
+                stdout=f, stderr=subprocess.STDOUT, env=mem_env, cwd=binius_dir)
+            procs.append(mv)
+            mv.wait()
+            return mv.returncode == 0
+
+    import threading
+    mem_result = [None]
+    def mem_thread():
+        mem_result[0] = run_memory_check()
+    mt = threading.Thread(target=mem_thread)
+    mt.start()
+
     # Cleanup on exit
     def cleanup(*_):
         for proc in procs:
             try: proc.kill()
             except: pass
-        shutil.rmtree(seg_out, ignore_errors=True)
 
     signal.signal(signal.SIGINT, lambda *_: (cleanup(), sys.exit(1)))
     signal.signal(signal.SIGTERM, lambda *_: (cleanup(), sys.exit(1)))
@@ -114,9 +146,9 @@ def main():
     # Monitor segment completion
     start = time.time()
     seen = set()
-    all_done = False
+    cpu_done = False
 
-    while not all_done:
+    while not cpu_done:
         # Check for new segment.done markers
         for seg in range(num_segments):
             if seg in seen:
@@ -127,28 +159,37 @@ def main():
                 elapsed = time.time() - start
                 seg_start = seg * SEGMENT_SIZE
                 seg_end = min(seg_start + SEGMENT_SIZE, total_steps)
-                print(f"  segment {seg:>2}: steps {seg_start}-{seg_end-1} ({seg_end-seg_start} steps) done at {elapsed:.1f}s")
+                print(f"  segment {seg:>2}: {seg_end-seg_start:>5} steps  done at {elapsed:.1f}s")
 
         # Check if batchman finished
         if p.poll() is not None and v.poll() is not None:
-            all_done = True
+            cpu_done = True
         else:
             time.sleep(0.1)
 
-    wall = time.time() - start
-
-    # Check success
+    cpu_wall = time.time() - start
     p_ok = p.returncode == 0
     v_ok = v.returncode == 0
 
-    print()
     if p_ok and v_ok:
-        print(f"  All {num_segments} segments complete. Wall time: {wall:.1f}s")
-        print(f"  Segment artifacts: {seg_out}/seg_*/")
+        print(f"  CPU proof: {num_segments} segments in {cpu_wall:.1f}s")
     else:
-        print(f"  FAILED (prover={p.returncode}, verifier={v.returncode})")
-        print(f"  Prover log: {p_log}")
-        print(f"  Verifier log: {v_log}")
+        print(f"  CPU proof FAILED (prover={p.returncode}, verifier={v.returncode})")
+
+    # Wait for memory check
+    mt.join()
+    mem_wall = time.time() - start
+
+    if mem_result[0]:
+        print(f"  Memory check: PASSED ({mem_wall:.1f}s)")
+    else:
+        print(f"  Memory check: FAILED (see {mem_prover_log})")
+
+    wall = time.time() - start
+    print()
+    print(f"  Wall time: {wall:.1f}s")
+
+    if not (p_ok and v_ok and mem_result[0]):
         sys.exit(1)
 
 

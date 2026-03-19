@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <string>
 
 namespace emp {
 
@@ -1230,6 +1231,81 @@ public:
         }
 
         fclose(f);
+    }
+
+    // Write per-segment artifacts to a directory.
+    // Creates: step_records_prover.bin, step_records_verifier.bin,
+    //          zero_product_prover.bin, zero_product_verifier.bin,
+    //          delta.bin, segment.done (marker)
+    void write_segment(const std::string &dir, int seg_start, int seg_end) {
+        int seg_count = seg_end - seg_start;
+
+        auto write_seg_step_records = [&](const std::string &path) {
+            FILE *f = fopen(path.c_str(), "wb");
+            if (!f) return;
+            uint32_t bs = (uint32_t)seg_count;
+            uint32_t bc = (uint32_t)branch_sz;
+            fwrite(&bs, 4, 1, f);
+            fwrite(&bc, 4, 1, f);
+            for (int b = seg_start; b < seg_end; b++) {
+                if (party == ALICE) {
+                    uint16_t ab = (uint16_t)active_branch_map[b];
+                    fwrite(&ab, 2, 1, f);
+                    fwrite(&step_record_plaintexts[(long long)b * branch_sz], 16 * branch_sz, 1, f);
+                }
+                fwrite(&step_records[(long long)b * branch_sz], 16 * branch_sz, 1, f);
+            }
+            fclose(f);
+        };
+
+        auto write_seg_zero_product = [&](const std::string &path) {
+            if (party != ALICE) return;
+            FILE *f = fopen(path.c_str(), "wb");
+            if (!f) return;
+            uint32_t bs = (uint32_t)seg_count;
+            uint32_t bc = (uint32_t)branch_sz;
+            fwrite(&bs, 4, 1, f);
+            fwrite(&bc, 4, 1, f);
+            for (int b = seg_start; b < seg_end; b++) {
+                uint16_t ab = (uint16_t)active_branch_map[b];
+                fwrite(&ab, 2, 1, f);
+                for (int bid = 0; bid < branch_sz; bid++) {
+                    fwrite(&proofs[(long long)b * branch_sz + bid], 8, 1, f);
+                    fwrite(&values[(long long)b * branch_sz + bid], 8, 1, f);
+                }
+            }
+            fclose(f);
+        };
+
+        auto write_seg_zero_product_verifier = [&](const std::string &path) {
+            if (party == ALICE) return;
+            FILE *f = fopen(path.c_str(), "wb");
+            if (!f) return;
+            uint32_t bs = (uint32_t)seg_count;
+            uint32_t bc = (uint32_t)branch_sz;
+            fwrite(&bs, 4, 1, f);
+            fwrite(&bc, 4, 1, f);
+            for (int b = seg_start; b < seg_end; b++) {
+                for (int bid = 0; bid < branch_sz; bid++)
+                    fwrite(&proofs[(long long)b * branch_sz + bid], 8, 1, f);
+            }
+            fclose(f);
+        };
+
+        if (party == ALICE) {
+            write_seg_step_records(dir + "/step_records_prover.bin");
+            write_seg_zero_product(dir + "/zero_product_prover.bin");
+        } else {
+            write_seg_step_records(dir + "/step_records_verifier.bin");
+            write_seg_zero_product_verifier(dir + "/zero_product_verifier.bin");
+            // delta is global, same for all segments (mock COT)
+            FILE *f = fopen((dir + "/delta.bin").c_str(), "wb");
+            if (f) { fwrite(&delta, 16, 1, f); fclose(f); }
+        }
+
+        // Marker file
+        FILE *f = fopen((dir + "/segment.done").c_str(), "w");
+        if (f) fclose(f);
     }
 };
 

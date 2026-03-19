@@ -575,6 +575,16 @@ void test_zk(BoolIO<NetIO> *ios[threads], int party,
         const char *conc_env = getenv("CONCURRENCY");
         if (seg_env) protocol.segment_size = atoi(seg_env);
         if (conc_env) protocol.max_concurrent_segments = atoi(conc_env);
+        const char *seg_out = getenv("SEGMENT_OUT_DIR");
+        if (seg_out && protocol.segment_size > 0) {
+            string seg_out_dir(seg_out);
+            protocol.on_segment_done = [&protocol, seg_out_dir](int seg_idx, int seg_start, int seg_end) {
+                string seg_dir = seg_out_dir + "/seg_" + to_string(seg_idx);
+                string mkdir_cmd = "mkdir -p " + seg_dir;
+                system(mkdir_cmd.c_str());
+                protocol.write_segment(seg_dir, seg_start, seg_end);
+            };
+        }
     }
 
     protocol.authenticate_and_multiply();

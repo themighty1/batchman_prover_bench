@@ -1303,9 +1303,11 @@ public:
             if (f) { fwrite(&delta, 16, 1, f); fclose(f); }
         }
 
-        // Marker file
-        FILE *f = fopen((dir + "/segment.done").c_str(), "w");
-        if (f) fclose(f);
+        // Marker file (prover only — coordinator reads prover files)
+        if (party == ALICE) {
+            FILE *f = fopen((dir + "/segment.done").c_str(), "w");
+            if (f) fclose(f);
+        }
     }
 };
 

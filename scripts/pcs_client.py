@@ -92,7 +92,9 @@ def compute_segment_keys(segment_dir: str, segment_keys_bin: str) -> tuple[list[
     """
     result = subprocess.run(
         [segment_keys_bin, segment_dir],
-        capture_output=True, check=True)
+        capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"segment_keys failed: {result.stderr.decode()}")
 
     data = result.stdout
     num_active, num_all = struct.unpack_from('<II', data, 0)

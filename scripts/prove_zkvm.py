@@ -18,6 +18,8 @@ import threading
 
 SEGMENT_SIZE = 10_000
 CONCURRENCY = 2
+PCS_SERVER_BIN = os.environ.get('PCS_SERVER_BIN',
+    os.path.expanduser('~/Desktop/tmp/whir-p3/target/release/pcs_server'))
 
 def find_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -79,6 +81,22 @@ def main():
     print("  Building binius binaries...")
     subprocess.run(['cargo', 'build', '--release'], cwd=binius_dir, capture_output=True)
 
+    procs = []
+
+    # Start PCS server if binary exists
+    pcs_server_proc = None
+    pcs_server_log = os.path.join(seg_out, 'pcs_server.log')
+    if os.path.exists(PCS_SERVER_BIN):
+        with open(pcs_server_log, 'w') as f:
+            pcs_server_proc = subprocess.Popen(
+                [PCS_SERVER_BIN],
+                stdout=f, stderr=subprocess.STDOUT)
+            procs.append(pcs_server_proc)
+        time.sleep(0.5)  # wait for server to bind
+        print("  PCS server started")
+    else:
+        print("  PCS server not found, skipping")
+
     # Launch Batchman prover + verifier
     env = os.environ.copy()
     env['SEGMENT_SIZE'] = str(SEGMENT_SIZE)
@@ -87,8 +105,6 @@ def main():
 
     port = 20100
     steps = str(total_steps)
-
-    procs = []
 
     # Verifier
     v_log = os.path.join(seg_out, 'verifier.log')
@@ -143,15 +159,18 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: (cleanup(), sys.exit(1)))
     signal.signal(signal.SIGTERM, lambda *_: (cleanup(), sys.exit(1)))
 
-    # PCS client — connect to server if available
+    # PCS client — connect to server if running
     segment_keys_bin = os.path.join(root, 'witgen', 'target', 'release', 'segment_keys')
     pcs_client = None
-    try:
-        from pcs_client import PCSClient, compute_segment_keys
-        pcs_client = PCSClient()
-        print("  Connected to PCS server")
-    except Exception:
-        pass  # PCS server not running, skip
+    if pcs_server_proc is not None:
+        try:
+            sys.path.insert(0, os.path.join(root, 'scripts'))
+            from pcs_client import PCSClient, compute_segment_keys
+            pcs_client = PCSClient()
+            pcs_client.send_config({'security_level': 100, 'pow_bits': 0})
+            print("  Connected to PCS server")
+        except Exception as e:
+            print(f"  WARNING: Could not connect to PCS server: {e}")
 
     def process_segment(seg_idx, seg_dir):
         """Compute keys and send to PCS server for a completed segment."""

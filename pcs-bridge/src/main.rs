@@ -1,5 +1,17 @@
-//! PCS Bridge: derive WHIR (Goldilocks) inputs that produce the same
-//! Merkle commitment as Binius for a column of B64 values.
+//! PCS Bridge: cross-field commitment for Batchman step record membership proofs.
+//!
+//! In the Batchman zkVM protocol, the prover uses Binius to commit to step record
+//! IT-MACs and prove MAC consistency (key = mac ⊕ delta · plaintext) after the
+//! verifier reveals delta. This produces a Binius Merkle commitment over the keys.
+//!
+//! The prover then needs to prove that its active-branch keys are a subset of all
+//! branch keys (set membership). This proof is prohibitively expensive in Binius
+//! (~60s for 5M keys) but cheap with WHIR over Goldilocks (~2s).
+//!
+//! The bridge converts the Binius key commitment into an equivalent commitment over
+//! Goldilocks field elements, so that WHIR can prove subset membership against the
+//! same Merkle root. Both systems produce identical Merkle trees from the same data,
+//! avoiding a second commitment and maintaining binding across field boundaries.
 
 use anyhow::Result;
 use binius_core::{

@@ -27,6 +27,20 @@ p3-commit = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
 
 blake3 = "1"
 digest = "0.10"
+rand = "0.9"
+
+# WHIR PCS prover
+whir-p3 = { path = "/home/default2/Desktop/tmp/whir-p3" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
+p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
 
 # Pin zerocopy for nightly compat
 zerocopy = "=0.8.26"
+
+[[bin]]
+name = "pcs-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "membership-test"
+path = "src/membership_test.rs"

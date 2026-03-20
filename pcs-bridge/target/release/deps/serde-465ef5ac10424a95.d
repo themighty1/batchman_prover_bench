@@ -1,0 +1,14 @@
+/home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/deps/serde-465ef5ac10424a95.d: /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/build/serde-e8583365e2085d0f/out/private.rs
+
+/home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/deps/libserde-465ef5ac10424a95.rlib: /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/build/serde-e8583365e2085d0f/out/private.rs
+
+/home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/deps/libserde-465ef5ac10424a95.rmeta: /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/build/serde-e8583365e2085d0f/out/private.rs
+
+/home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/default2/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/build/serde-e8583365e2085d0f/out/private.rs:
+
+# env-dep:OUT_DIR=/home/default2/Desktop/tmp/stacking-vole-zk/pcs-bridge/target/release/build/serde-e8583365e2085d0f/out

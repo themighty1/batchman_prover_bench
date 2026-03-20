@@ -27,6 +27,7 @@ use binius_field::{
     PackedExtension, PackedField, TowerField,
     packed::set_packed_slice,
 };
+use binius_utils::{SerializationMode, SerializeBytes};
 use binius_hash::compression::PseudoCompressionFunction;
 use binius_math::MultilinearExtension;
 use binius_ntt::SingleThreadedNTT;
@@ -154,64 +155,43 @@ fn main() -> Result<()> {
     println!("  {:02x?}", &binius_root[..]);
     println!();
 
-    // Step 3: Extract the codeword and understand leaf structure
+    // Step 3: Understand serialization format
+    // Compare raw memcpy bytes vs SerializeBytes for a packed element
     let codeword = &output.codeword;
     println!("Codeword: {} packed elements", codeword.len());
 
-    // The codeword is a flat array of packed B128 elements.
-    // The Merkle tree has 2^log_len leaves.
-    // Each leaf hashes a contiguous chunk of the serialized codeword.
-    //
-    // For our test case: serialize each packed element to bytes,
-    // then manually build Blake3 leaf hashes and compare to binius tree.
+    let first_elem = codeword[0];
+    let raw_bytes: [u8; 16] = bytemuck_cast(first_elem);
+    let mut ser_bytes = Vec::new();
+    SerializeBytes::serialize(&first_elem, &mut ser_bytes, SerializationMode::CanonicalTower)
+        .expect("serialize");
+    println!("  First element:");
+    println!("    raw bytes:        {:02x?}", &raw_bytes);
+    println!("    SerializeBytes:   {:02x?}", &ser_bytes);
+    println!("    match: {}", raw_bytes.as_slice() == ser_bytes.as_slice());
 
-    // Serialize codeword to raw bytes (CanonicalTower mode = LE bytes)
-    let mut codeword_bytes = Vec::new();
-    for elem in codeword.iter() {
-        let bytes: [u8; 16] = bytemuck_cast(*elem);
-        codeword_bytes.extend_from_slice(&bytes);
-    }
-    println!("  Serialized codeword: {} bytes", codeword_bytes.len());
-
-    // The Merkle tree has 2^(rs_code.log_len - log_batch) leaves.
-    // Each leaf covers batch_size * 16 bytes of codeword data.
-    let log_len = fri_params.rs_code().log_len();
-    let log_batch = fri_params.log_batch_size();
-    let tree_log_len = tree.log_len;
-    let num_leaves = 1 << tree_log_len;
-    let bytes_per_leaf = codeword_bytes.len() / num_leaves;
-    println!("  rs log_len: {}, log_batch: {}, tree log_len: {}", log_len, log_batch, tree_log_len);
-    println!("  Leaves: {}, bytes per leaf: {}", num_leaves, bytes_per_leaf);
-
-    // Manually hash each leaf chunk with Blake3
-    println!("\n  Manual leaf hashes (first 4):");
-    for i in 0..std::cmp::min(4, num_leaves) {
-        let chunk = &codeword_bytes[i * bytes_per_leaf .. (i+1) * bytes_per_leaf];
-        let hash = blake3::hash(chunk);
-        println!("    leaf[{}]: {:02x?}  (data: {:02x?})", i, &hash.as_bytes()[..8], &chunk[..std::cmp::min(16, chunk.len())]);
-    }
-
-    // Access the committed tree to compare
+    // Step 4: Manually reproduce leaf hashes using SerializeBytes
     let tree = &output.committed;
-    println!("\n  Tree log_len: {}", tree.log_len);
-    for depth in 0..=tree.log_len {
-        match tree.layer(depth) {
-            Ok(layer) => println!("    layer[{}]: {} nodes, first: {:02x?}", depth, layer.len(), &layer[0][..8]),
-            Err(e) => println!("    layer[{}]: error: {}", depth, e),
-        }
-    }
+    let num_leaves = 1 << tree.log_len;
+    let elems_per_leaf = codeword.len() / num_leaves;
+    println!("\n  Tree: {} leaves, {} elems per leaf", num_leaves, elems_per_leaf);
 
-    // Check if our manual hashes match the deepest layer
-    if let Ok(leaves) = tree.layer(tree.log_len) {
-        let mut match_count = 0;
-        for i in 0..std::cmp::min(num_leaves, leaves.len()) {
-            let chunk = &codeword_bytes[i * bytes_per_leaf .. (i+1) * bytes_per_leaf];
-            let hash = blake3::hash(chunk);
-            if hash.as_bytes() == leaves[i].as_slice() {
-                match_count += 1;
-            }
+    // Hash each leaf chunk using SerializeBytes (matching binius exactly)
+    for i in 0..num_leaves {
+        let chunk = &codeword[i * elems_per_leaf .. (i+1) * elems_per_leaf];
+        let mut hasher = blake3::Hasher::new();
+        for elem in chunk {
+            let mut buf = Vec::new();
+            SerializeBytes::serialize(elem, &mut buf, SerializationMode::CanonicalTower)
+                .expect("serialize");
+            hasher.update(&buf);
         }
-        println!("\n  Leaf hash match: {}/{}", match_count, leaves.len());
+        let hash = hasher.finalize();
+
+        let tree_leaf = &tree.layer(tree.log_len).unwrap()[i];
+        let matches = hash.as_bytes() == tree_leaf.as_slice();
+        println!("    leaf[{}]: manual={:02x?} tree={:02x?} match={}",
+            i, &hash.as_bytes()[..8], &tree_leaf[..8], matches);
     }
 
     Ok(())

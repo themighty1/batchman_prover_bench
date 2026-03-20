@@ -68,6 +68,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "binius-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "binius_core",
+ "binius_field",
+ "binius_hash",
+ "binius_m3",
+ "binius_math",
+ "binius_ntt",
+ "binius_utils",
+ "blake3",
+ "digest",
+]
+
+[[package]]
 name = "binius_compute"
 version = "0.2.0"
 source = "git+https://github.com/themighty1/binius?rev=268ed24d578933e782fcecd2409e190c52adb36b#268ed24d578933e782fcecd2409e190c52adb36b"
@@ -937,10 +953,9 @@ name = "pcs-bridge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "binius-shared",
  "binius_core",
  "binius_field",
- "binius_hash",
- "binius_m3",
  "binius_math",
  "binius_ntt",
  "binius_utils",
@@ -954,6 +969,7 @@ dependencies = [
  "p3-keccak",
  "p3-matrix",
  "p3-merkle-tree",
+ "p3-multilinear-util",
  "p3-symmetric",
  "rand 0.9.2",
  "whir-p3",

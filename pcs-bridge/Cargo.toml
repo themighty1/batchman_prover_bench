@@ -7,15 +7,13 @@ description = "Cross-field PCS bridge: derive WHIR inputs that produce the same 
 [dependencies]
 anyhow = "1.0"
 
-# Binius (reuse lib from binius/ crate for commitment + Blake3 wrappers)
-memory-checker-and-lookup = { path = "../binius" }
+# Binius shared utilities (Blake3 wrappers, column commitment)
+binius-shared = { path = "../binius-shared" }
 binius_core = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 binius_field = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 binius_ntt = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
-binius_hash = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 binius_math = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 binius_utils = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", default-features = false }
-binius_m3 = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 
 # Plonky3 / Goldilocks (for WHIR side)
 p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }

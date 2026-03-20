@@ -1,0 +1,18 @@
+[package]
+name = "binius-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Shared utilities: Blake3 digest wrapper and binius column commitment helpers"
+
+[dependencies]
+anyhow = "1.0"
+blake3 = "1"
+digest = "0.10"
+
+binius_core = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_field = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_hash = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_math = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_ntt = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_utils = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", default-features = false }
+binius_m3 = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }

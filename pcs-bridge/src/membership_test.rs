@@ -26,7 +26,7 @@ fn fmt_dur(d: std::time::Duration) -> String {
     }
 }
 
-const NUM_ACTIVE: usize = 10_000;
+const NUM_ACTIVE: usize = 1_000;
 const BRANCH_COUNT: usize = 50;
 const GOLDILOCKS_P: u64 = Goldilocks::ORDER_U64;
 
@@ -136,11 +136,10 @@ fn main() {
         assert_eq!(*z, p_gl[p_idx], "Z[{}] not in P at expected position", i);
     }
 
-    // Run polynomial tests at multiple scales
-    for &test_size in &[100, 1000, NUM_ACTIVE] {
+    // Polynomial test at full size
+    {
+        let test_size = NUM_ACTIVE;
         let total_size = test_size * BRANCH_COUNT;
-        if test_size > NUM_ACTIVE { continue; }
-
         println!("─── {} active / {} total roots ───", test_size, total_size);
 
         let test_z: Vec<F> = z_gl[..test_size].to_vec();

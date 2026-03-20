@@ -19,6 +19,7 @@ rayon = [
 
 [dependencies]
 anyhow = "1.0"
+binius-shared = { path = "../binius-shared" }
 batchman_witness_generator = { path = "../witgen" }
 blake3 = "1.5"
 digest = "0.10"
@@ -80,6 +81,10 @@ path = "src/step_records_membership_verifier.rs"
 [[bin]]
 name = "bench_fri"
 path = "src/bench_fri.rs"
+
+[[bin]]
+name = "bench_zero_product"
+path = "src/bench_zero_product.rs"
 
 [profile.release]
 lto = "thin"

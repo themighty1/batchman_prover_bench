@@ -27,7 +27,7 @@ use binius_field::{
 use binius_math::MultilinearExtension;
 use binius_ntt::SingleThreadedNTT;
 use binius_utils::{SerializationMode, SerializeBytes, checked_arithmetics::log2_ceil_usize};
-use memory_checker_and_lookup::{Blake3Digest, Blake3Compression, B64};
+use binius_shared::{Blake3Digest, Blake3Compression, B64};
 
 use p3_goldilocks::Goldilocks;
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     let security_bits = 100;
     let fri_strategy = FriStrategy::ConstantArity(8);
 
-    let binius_root = memory_checker_and_lookup::commit_column_b64(
+    let binius_root = binius_shared::commit_column_b64(
         &values_b64, log_inv_rate, security_bits, &fri_strategy,
     )?;
     println!("Binius root: {:02x?}", &binius_root);

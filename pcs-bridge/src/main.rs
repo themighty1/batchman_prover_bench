@@ -205,6 +205,10 @@ fn main() -> Result<()> {
             let off = start + j * 8;
             let val = u64::from_le_bytes(codeword_bytes[off..off+8].try_into().unwrap());
             // Check if val fits in Goldilocks (< p = 2^64 - 2^32 + 1)
+            // Store raw u64 — Goldilocks::new doesn't reduce, so the
+            // internal value preserves the exact binius bytes for hashing.
+            // For values >= p, Goldilocks arithmetic would give wrong results,
+            // but we only use these for Merkle commitment (byte hashing), not arithmetic.
             row.push(Goldilocks::new(val));
         }
         gl_leaves.push(row);

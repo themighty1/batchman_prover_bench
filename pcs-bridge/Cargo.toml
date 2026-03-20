@@ -32,6 +32,7 @@ rand = "0.9"
 whir-p3 = { path = "/home/default2/Desktop/tmp/whir-p3" }
 p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
 p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
+p3-multilinear-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
 
 # Pin zerocopy for nightly compat
 zerocopy = "=0.8.26"

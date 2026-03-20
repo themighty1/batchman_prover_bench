@@ -18,6 +18,14 @@ use rand::{SeedableRng, rngs::SmallRng, Rng};
 type F = Goldilocks;
 type EF = BinomialExtensionField<F, 2>;
 
+fn fmt_dur(d: std::time::Duration) -> String {
+    if d.as_secs_f64() >= 1.0 {
+        format!("{:.2}s", d.as_secs_f64())
+    } else {
+        format!("{:.1}ms", d.as_secs_f64() * 1000.0)
+    }
+}
+
 const NUM_ACTIVE: usize = 10_000;
 const BRANCH_COUNT: usize = 50;
 const GOLDILOCKS_P: u64 = Goldilocks::ORDER_U64;
@@ -110,6 +118,7 @@ fn main() {
     }
 
     // Step 3: Convert to Goldilocks with overflow fixup
+    let t = std::time::Instant::now();
     let mut overflow_count = 0u64;
     let z_gl: Vec<F> = z_raw.iter().map(|&v| {
         if v >= GOLDILOCKS_P { overflow_count += 1; }
@@ -119,50 +128,58 @@ fn main() {
         if v >= GOLDILOCKS_P { overflow_count += 1; }
         b64_to_goldilocks(v)
     }).collect();
-
-    println!("  Goldilocks overflows: {}", overflow_count);
+    let convert_time = t.elapsed();
 
     // Verify Z ⊂ P at the value level
     for (i, z) in z_gl.iter().enumerate() {
         let p_idx = i * BRANCH_COUNT;
         assert_eq!(*z, p_gl[p_idx], "Z[{}] not in P at expected position", i);
     }
-    println!("  Z ⊂ P: verified (positional check)");
 
-    // Step 4: Build polynomials (use small subset for speed — full 500K roots is slow)
-    let test_size = 100; // use 100 active values for polynomial test
-    let test_z: Vec<F> = z_gl[..test_size].to_vec();
-    let test_p: Vec<F> = p_gl[..test_size * BRANCH_COUNT].to_vec();
+    // Run polynomial tests at multiple scales
+    for &test_size in &[100, 1000, NUM_ACTIVE] {
+        let total_size = test_size * BRANCH_COUNT;
+        if test_size > NUM_ACTIVE { continue; }
 
-    println!();
-    println!("  Polynomial test with {} active / {} total roots...", test_size, test_size * BRANCH_COUNT);
+        println!("─── {} active / {} total roots ───", test_size, total_size);
 
-    let t = std::time::Instant::now();
-    let z_poly = build_vanishing_poly(&test_z);
-    println!("  Z poly: {} coeffs ({:.1}ms)", z_poly.len(), t.elapsed().as_secs_f64() * 1000.0);
+        let test_z: Vec<F> = z_gl[..test_size].to_vec();
+        let test_p: Vec<F> = p_gl[..total_size].to_vec();
 
-    let t = std::time::Instant::now();
-    let p_poly = build_vanishing_poly(&test_p);
-    println!("  P poly: {} coeffs ({:.1}ms)", p_poly.len(), t.elapsed().as_secs_f64() * 1000.0);
+        let t = std::time::Instant::now();
+        let z_poly = build_vanishing_poly(&test_z);
+        let z_build = t.elapsed();
 
-    // Step 5: Divide P / Z — must have zero remainder
-    let t = std::time::Instant::now();
-    let (q_poly, remainder) = poly_div(&p_poly, &z_poly);
-    let div_time = t.elapsed();
-    println!("  Q poly: {} coeffs ({:.1}ms)", q_poly.len(), div_time.as_secs_f64() * 1000.0);
-    println!("  Remainder: {} (should be empty)", remainder.len());
-    assert!(remainder.is_empty(), "P / Z has non-zero remainder — Z is NOT a subset of P's roots!");
-    println!("  P(x) / Z(x) divides cleanly: PASSED");
+        let t = std::time::Instant::now();
+        let p_poly = build_vanishing_poly(&test_p);
+        let p_build = t.elapsed();
 
-    // Step 6: Verify P(α) = Z(α) · Q(α) at random challenge
-    let alpha = EF::from(Goldilocks::new(rng.gen::<u64>() % GOLDILOCKS_P));
-    let p_alpha = eval_poly(&p_poly, alpha);
-    let z_alpha = eval_poly(&z_poly, alpha);
-    let q_alpha = eval_poly(&q_poly, alpha);
+        let t = std::time::Instant::now();
+        let (q_poly, remainder) = poly_div(&p_poly, &z_poly);
+        let div_time = t.elapsed();
 
-    assert_eq!(p_alpha, z_alpha * q_alpha, "P(α) ≠ Z(α) · Q(α)");
-    println!("  P(α) = Z(α) · Q(α): PASSED");
+        assert!(remainder.is_empty(), "P / Z has non-zero remainder!");
 
-    println!();
+        let t = std::time::Instant::now();
+        let alpha = EF::from(Goldilocks::new(rng.gen::<u64>() % GOLDILOCKS_P));
+        let p_alpha = eval_poly(&p_poly, alpha);
+        let z_alpha = eval_poly(&z_poly, alpha);
+        let q_alpha = eval_poly(&q_poly, alpha);
+        let eval_time = t.elapsed();
+
+        assert_eq!(p_alpha, z_alpha * q_alpha, "P(α) ≠ Z(α) · Q(α)");
+
+        println!("  B64→GL convert:  {:>10}", fmt_dur(convert_time));
+        println!("  Build Z poly:    {:>10}  ({} coeffs)", fmt_dur(z_build), z_poly.len());
+        println!("  Build P poly:    {:>10}  ({} coeffs)", fmt_dur(p_build), p_poly.len());
+        println!("  Q = P / Z:       {:>10}  ({} coeffs)", fmt_dur(div_time), q_poly.len());
+        println!("  Eval at α:       {:>10}", fmt_dur(eval_time));
+        println!("  Overflows:       {}", overflow_count);
+        let total = z_build + p_build + div_time + eval_time;
+        println!("  Total:           {:>10}", fmt_dur(total));
+        println!("  P(α) = Z(α)·Q(α): PASSED");
+        println!();
+    }
+
     println!("=== All checks passed ===");
 }

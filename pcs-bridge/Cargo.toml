@@ -7,7 +7,8 @@ description = "Cross-field PCS bridge: derive WHIR inputs that produce the same 
 [dependencies]
 anyhow = "1.0"
 
-# Binius (for NTT and commitment)
+# Binius (reuse lib from binius/ crate for commitment + Blake3 wrappers)
+memory-checker-and-lookup = { path = "../binius" }
 binius_core = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 binius_field = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
 binius_ntt = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }

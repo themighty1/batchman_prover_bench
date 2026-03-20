@@ -9,11 +9,15 @@ anyhow = "1.0"
 
 # Binius shared utilities (Blake3 wrappers, column commitment)
 binius-shared = { path = "../binius-shared" }
-binius_core = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
-binius_field = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
-binius_ntt = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
-binius_math = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
-binius_utils = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", default-features = false }
+binius_compute = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b" }
+binius_core = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_fast_compute = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_field = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_hal = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_m3 = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_math = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_ntt = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", features = ["rayon"] }
+binius_utils = { git = "https://github.com/themighty1/binius", rev = "268ed24d578933e782fcecd2409e190c52adb36b", default-features = false, features = ["rayon"] }
 
 # Plonky3 / Goldilocks (for WHIR side)
 p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
@@ -24,6 +28,10 @@ p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa51
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
 p3-commit = { git = "https://github.com/Plonky3/Plonky3.git", rev = "b0fa5139" }
 
+batchman_witness_generator = { path = "../witgen" }
+memory-checker-and-lookup = { path = "../binius" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 blake3 = "1"
 digest = "0.10"
 rand = "0.9"
@@ -44,3 +52,7 @@ path = "src/main.rs"
 [[bin]]
 name = "membership-test"
 path = "src/membership_test.rs"
+
+[[bin]]
+name = "single-value-bench"
+path = "src/single_value_bench.rs"

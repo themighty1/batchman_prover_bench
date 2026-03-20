@@ -84,7 +84,7 @@ impl binius_hash::compression::CompressionFunction<digest::Output<Blake3Digest>,
 
 fn main() -> Result<()> {
     // Test data: small column of B64 values
-    let raw_values: Vec<u64> = (0..16).map(|i| i * 1000 + 42).collect();
+    let raw_values: Vec<u64> = (0..1024).map(|i| i * 1000 + 42).collect();
     let values: Vec<B64> = raw_values.iter().map(|&v| B64::new(v)).collect();
 
     println!("=== PCS Bridge: Binius → WHIR ===");
@@ -154,17 +154,64 @@ fn main() -> Result<()> {
     println!("  {:02x?}", &binius_root[..]);
     println!();
 
-    // Step 3: Extract the codeword from the committed data
-    // The codeword is the RS-encoded polynomial — the Merkle leaves.
-    // We need to access it from the committed output.
-    let codeword = output.codeword;
-    println!("Codeword:");
-    println!("  type: {} elements", codeword.len());
-    println!("  first 4 elements (as bytes):");
-    for (i, elem) in codeword.iter().take(4).enumerate() {
-        // Each element is a packed B128 containing RS-encoded data
+    // Step 3: Extract the codeword and understand leaf structure
+    let codeword = &output.codeword;
+    println!("Codeword: {} packed elements", codeword.len());
+
+    // The codeword is a flat array of packed B128 elements.
+    // The Merkle tree has 2^log_len leaves.
+    // Each leaf hashes a contiguous chunk of the serialized codeword.
+    //
+    // For our test case: serialize each packed element to bytes,
+    // then manually build Blake3 leaf hashes and compare to binius tree.
+
+    // Serialize codeword to raw bytes (CanonicalTower mode = LE bytes)
+    let mut codeword_bytes = Vec::new();
+    for elem in codeword.iter() {
         let bytes: [u8; 16] = bytemuck_cast(*elem);
-        println!("    [{}]: {:02x?}", i, &bytes);
+        codeword_bytes.extend_from_slice(&bytes);
+    }
+    println!("  Serialized codeword: {} bytes", codeword_bytes.len());
+
+    // The Merkle tree has 2^(rs_code.log_len - log_batch) leaves.
+    // Each leaf covers batch_size * 16 bytes of codeword data.
+    let log_len = fri_params.rs_code().log_len();
+    let log_batch = fri_params.log_batch_size();
+    let tree_log_len = tree.log_len;
+    let num_leaves = 1 << tree_log_len;
+    let bytes_per_leaf = codeword_bytes.len() / num_leaves;
+    println!("  rs log_len: {}, log_batch: {}, tree log_len: {}", log_len, log_batch, tree_log_len);
+    println!("  Leaves: {}, bytes per leaf: {}", num_leaves, bytes_per_leaf);
+
+    // Manually hash each leaf chunk with Blake3
+    println!("\n  Manual leaf hashes (first 4):");
+    for i in 0..std::cmp::min(4, num_leaves) {
+        let chunk = &codeword_bytes[i * bytes_per_leaf .. (i+1) * bytes_per_leaf];
+        let hash = blake3::hash(chunk);
+        println!("    leaf[{}]: {:02x?}  (data: {:02x?})", i, &hash.as_bytes()[..8], &chunk[..std::cmp::min(16, chunk.len())]);
+    }
+
+    // Access the committed tree to compare
+    let tree = &output.committed;
+    println!("\n  Tree log_len: {}", tree.log_len);
+    for depth in 0..=tree.log_len {
+        match tree.layer(depth) {
+            Ok(layer) => println!("    layer[{}]: {} nodes, first: {:02x?}", depth, layer.len(), &layer[0][..8]),
+            Err(e) => println!("    layer[{}]: error: {}", depth, e),
+        }
+    }
+
+    // Check if our manual hashes match the deepest layer
+    if let Ok(leaves) = tree.layer(tree.log_len) {
+        let mut match_count = 0;
+        for i in 0..std::cmp::min(num_leaves, leaves.len()) {
+            let chunk = &codeword_bytes[i * bytes_per_leaf .. (i+1) * bytes_per_leaf];
+            let hash = blake3::hash(chunk);
+            if hash.as_bytes() == leaves[i].as_slice() {
+                match_count += 1;
+            }
+        }
+        println!("\n  Leaf hash match: {}/{}", match_count, leaves.len());
     }
 
     Ok(())

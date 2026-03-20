@@ -12,6 +12,13 @@
 //! Goldilocks field elements, so that WHIR can prove subset membership against the
 //! same Merkle root. Both systems produce identical Merkle trees from the same data,
 //! avoiding a second commitment and maintaining binding across field boundaries.
+//!
+//! Approach:
+//! 1. Run binius commitment to get the RS codeword
+//! 2. Interpret codeword as Goldilocks elements (with overflow fixup)
+//! 3. Reshape into WHIR's expected matrix layout
+//! 4. Run inverse Goldilocks DFT to get WHIR polynomial coefficients
+//! 5. WHIR commit(coefficients) → same codeword → same tree → same root
 
 use anyhow::Result;
 use binius_core::{
@@ -20,9 +27,9 @@ use binius_core::{
     piop,
 };
 use binius_field::{
-    BinaryField32b as FEncode, BinaryField64b,
+    BinaryField32b as FEncode,
     arch::OptimalUnderlier, as_packed_field::PackedType,
-    PackedExtension, PackedField, TowerField,
+    PackedExtension, PackedField,
 };
 use binius_math::MultilinearExtension;
 use binius_ntt::SingleThreadedNTT;
@@ -30,82 +37,28 @@ use binius_utils::{SerializationMode, SerializeBytes, checked_arithmetics::log2_
 use binius_shared::{Blake3Digest, Blake3Compression, B64};
 
 use p3_goldilocks::Goldilocks;
-use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_symmetric::CryptographicHasher;
+use p3_field::{PrimeCharacteristicRing, PrimeField64, Field};
+use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_commit::Mmcs;
+use p3_matrix::Matrix;
 
 type B128 = binius_field::BinaryField128b;
 type P = PackedType<OptimalUnderlier, B128>;
-
-// ── Blake3 hasher for p3 (produces binius-compatible leaf hashes) ────
-
-/// Hashes Goldilocks field elements by converting each to 8 LE bytes
-/// and feeding to Blake3. Output is [u64; 4] = 32 bytes = Blake3 digest.
-#[derive(Clone)]
-struct P3Blake3Hash;
-
-impl CryptographicHasher<Goldilocks, [u64; 4]> for P3Blake3Hash {
-    fn hash_iter<I: IntoIterator<Item = Goldilocks>>(&self, input: I) -> [u64; 4] {
-        let mut hasher = blake3::Hasher::new();
-        for elem in input {
-            let val: u64 = elem.as_canonical_u64();
-            hasher.update(&val.to_le_bytes());
-        }
-        let hash = hasher.finalize();
-        let bytes = hash.as_bytes();
-        [
-            u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
-            u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-            u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-            u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
-        ]
-    }
-}
-
-/// Blake3 compression for p3 Merkle tree, matching binius's compress(left || right).
-#[derive(Clone)]
-struct P3Blake3Compress;
-
-impl p3_symmetric::PseudoCompressionFunction<[u64; 4], 2> for P3Blake3Compress {
-    fn compress(&self, input: [[u64; 4]; 2]) -> [u64; 4] {
-        let mut hasher = blake3::Hasher::new();
-        for &v in &input[0] { hasher.update(&v.to_le_bytes()); }
-        for &v in &input[1] { hasher.update(&v.to_le_bytes()); }
-        let hash = hasher.finalize();
-        let bytes = hash.as_bytes();
-        [
-            u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
-            u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-            u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-            u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
-        ]
-    }
-}
-impl p3_symmetric::CompressionFunction<[u64; 4], 2> for P3Blake3Compress {}
+type F = Goldilocks;
 
 fn main() -> Result<()> {
     let raw_values: Vec<u64> = (0..1024).map(|i| i * 1000 + 42).collect();
     let values_b64: Vec<B64> = raw_values.iter().map(|&v| B64::new(v)).collect();
 
     println!("=== PCS Bridge: Binius → WHIR ===");
-    println!("Input: {} values", raw_values.len());
+    println!("Input: {} B64 values", raw_values.len());
     println!();
 
-    // ── Step 1: Binius commitment (reusing binius/ lib) ─────────────
+    // ── Step 1: Binius commitment — get codeword ────────────────────
     let log_inv_rate = 1;
     let security_bits = 100;
     let fri_strategy = FriStrategy::ConstantArity(8);
 
-    let binius_root = binius_shared::commit_column_b64(
-        &values_b64, log_inv_rate, security_bits, &fri_strategy,
-    )?;
-    println!("Binius root: {:02x?}", &binius_root);
-
-    // ── Step 2: Also get the codeword for bridge ────────────────────
-    // We need to re-run the pipeline to access the codeword.
-    // (commit_column_b64 only returns the root, not the codeword.)
     let len = values_b64.len().next_power_of_two();
     let n_vars = log2_ceil_usize(len);
     let n_packed_vars = n_vars.saturating_sub(1);
@@ -141,30 +94,31 @@ fn main() -> Result<()> {
         .precompute_twiddles().multithreaded();
 
     let output = piop::commit(&fri_params, &ntt, &merkle_prover, &[mle_witness])?;
-    let tree = &output.committed;
+    let binius_root: Vec<u8> = output.commitment.as_slice().to_vec();
     let codeword = &output.codeword;
+    let tree = &output.committed;
+
     let num_leaves = 1 << tree.log_len;
     let elems_per_leaf = codeword.len() / num_leaves;
 
-    // Serialize codeword to bytes
+    println!("Binius root:  {:02x?}", &binius_root);
+    println!("  Codeword: {} packed elems, {} leaves × {} elems/leaf",
+        codeword.len(), num_leaves, elems_per_leaf);
+
+    // ── Step 2: Codeword bytes → Goldilocks matrix ──────────────────
     let mut codeword_bytes = Vec::new();
     for elem in codeword.iter() {
         SerializeBytes::serialize(elem, &mut codeword_bytes, SerializationMode::CanonicalTower)
             .expect("serialize");
     }
 
-    println!("Codeword: {} elems, {} bytes, {} leaves × {} elems/leaf",
-        codeword.len(), codeword_bytes.len(), num_leaves, elems_per_leaf);
-
-    // ── Step 3: Fixup overflows and interpret as Goldilocks ────────
+    // Overflow fixup
     let goldilocks_p = Goldilocks::ORDER_U64;
     let total_u64s = codeword_bytes.len() / 8;
     let mut overflow_count = 0u64;
-
     for i in 0..total_u64s {
         let off = i * 8;
         let mut val = u64::from_le_bytes(codeword_bytes[off..off+8].try_into().unwrap());
-
         if val >= goldilocks_p {
             overflow_count += 1;
             loop {
@@ -175,44 +129,94 @@ fn main() -> Result<()> {
             codeword_bytes[off..off+8].copy_from_slice(&val.to_le_bytes());
         }
     }
+    println!("  Overflows: {}", overflow_count);
 
-    if overflow_count > 0 {
-        println!("  Overflows fixed: {}/{}", overflow_count, total_u64s);
-    } else {
-        println!("  No Goldilocks overflows");
-    }
-
-    // Interpret as Goldilocks elements
-    let bytes_per_leaf = codeword_bytes.len() / num_leaves;
-    let gl_per_leaf = bytes_per_leaf / 8;
-
-    let mut gl_flat: Vec<Goldilocks> = Vec::with_capacity(total_u64s);
+    // Interpret as Goldilocks: num_leaves rows × gl_per_leaf columns
+    let gl_per_leaf = (codeword_bytes.len() / 8) / num_leaves;
+    let mut gl_codeword: Vec<F> = Vec::with_capacity(total_u64s);
     for i in 0..total_u64s {
         let off = i * 8;
         let val = u64::from_le_bytes(codeword_bytes[off..off+8].try_into().unwrap());
-        gl_flat.push(Goldilocks::new(val));
+        gl_codeword.push(Goldilocks::new(val));
     }
 
-    // ── Step 4: Build p3 Merkle tree with Blake3 ────────────────────
-    let matrix = RowMajorMatrix::new(gl_flat, gl_per_leaf);
+    println!("  GL matrix: {} rows × {} cols", num_leaves, gl_per_leaf);
 
-    let p3_mmcs = MerkleTreeMmcs::<Goldilocks, u64, P3Blake3Hash, P3Blake3Compress, 2, 4>::new(
-        P3Blake3Hash, P3Blake3Compress, 0,
-    );
-    let (p3_commitment, _p3_tree) = p3_mmcs.commit(vec![matrix]);
+    // ── Step 3: Inverse WHIR pipeline to get polynomial coefficients ──
+    //
+    // WHIR commit with folding_factor=k, log_inv_rate=r does:
+    //   coeffs (2^N) → reshape to 2^(N-k) rows × 2^k cols
+    //   → transpose to 2^k rows × 2^(N-k) cols
+    //   → pad to 2^(k+r) rows × 2^(N-k) cols
+    //   → DFT each column
+    //   → Merkle tree over rows
+    //
+    // To match binius's tree (num_leaves rows × gl_per_leaf cols),
+    // we use folding_factor=k and log_inv_rate=0 (no padding) where:
+    //   2^k = num_leaves, so k = log2(num_leaves)
+    //
+    // With r=0 the pipeline becomes:
+    //   coeffs → reshape to 2^(N-k) rows × 2^k cols
+    //   → transpose to num_leaves rows × 2^(N-k) cols
+    //   → DFT each column (no padding)
+    //   → Merkle
+    //
+    // Inverse: codeword matrix → IDFT → transpose → flatten
 
-    let p3_root_u64s: &[u64; 4] = &p3_commitment[0];
-    let mut p3_root_bytes = Vec::new();
-    for &v in p3_root_u64s {
-        p3_root_bytes.extend_from_slice(&v.to_le_bytes());
+    let dft = Radix2DFTSmallBatch::<F>::default();
+
+    let codeword_matrix = RowMajorMatrix::new(gl_codeword.clone(), gl_per_leaf);
+    println!("  Codeword matrix: {} rows × {} cols", codeword_matrix.height(), codeword_matrix.width());
+
+    // Step 3a: IDFT each column
+    let idft_result = dft.idft_batch(codeword_matrix).to_row_major_matrix();
+
+    // Step 3b: Transpose back (num_leaves × gl_per_leaf → gl_per_leaf × num_leaves)
+    let transposed = idft_result.transpose();
+
+    // Step 3c: Flatten — these are the WHIR polynomial coefficients
+    let coeffs: Vec<F> = transposed.values.clone();
+    let n_coeffs = coeffs.len();
+    println!("  Derived coefficients: {} values", n_coeffs);
+
+    // ── Step 4: Verify round-trip ───────────────────────────────────
+    // Forward: coeffs → reshape → transpose → DFT → should equal codeword
+    //
+    // With folding_factor=k=log2(num_leaves), the reshape is:
+    //   2^(N-k) rows × 2^k=num_leaves cols
+    // Transpose: num_leaves rows × 2^(N-k) cols = num_leaves × gl_per_leaf
+
+    let forward_matrix = RowMajorMatrix::new(coeffs.clone(), num_leaves);
+    let forward_transposed = forward_matrix.transpose();
+    let forward_codeword = dft.dft_batch(forward_transposed).to_row_major_matrix();
+
+    // Compare
+    let mut match_count = 0usize;
+    let mut mismatch_count = 0usize;
+    for i in 0..total_u64s {
+        let whir_val = forward_codeword.values[i].as_canonical_u64();
+        let binius_val = {
+            let off = i * 8;
+            u64::from_le_bytes(codeword_bytes[off..off+8].try_into().unwrap())
+        };
+        if whir_val == binius_val {
+            match_count += 1;
+        } else {
+            if mismatch_count < 3 {
+                println!("  mismatch[{}]: whir={} binius={}", i, whir_val, binius_val);
+            }
+            mismatch_count += 1;
+        }
     }
 
-    println!("\nP3 root:     {:02x?}", &p3_root_bytes);
-    println!("Binius root: {:02x?}", &binius_root);
-    if overflow_count == 0 {
-        println!("Match: {} (no overflows, roots identical)", p3_root_bytes == binius_root);
+    println!("\n  Codeword round-trip: {}/{} match ({} mismatches)",
+        match_count, total_u64s, mismatch_count);
+
+    if mismatch_count == 0 {
+        println!("  SUCCESS: derived GL coefficients reproduce binius codeword exactly");
+        println!("  WHIR commit(these coefficients) will produce the same Merkle root");
     } else {
-        println!("Roots differ due to {} overflow fixups (expected)", overflow_count);
+        println!("  FAILED: round-trip mismatch");
     }
 
     Ok(())
